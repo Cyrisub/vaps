@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"vaps/internal/blobstore"
+	"vaps/internal/cache"
 	"vaps/internal/metadata"
 )
 
 type Handler struct {
 	store *blobstore.Store
 	meta  *metadata.Store
+	cache *cache.Cache
 }
 
 type existsRequest struct {
@@ -45,6 +47,14 @@ func New(store *blobstore.Store) http.Handler {
 
 func NewWithMetadata(store *blobstore.Store, meta *metadata.Store) http.Handler {
 	return &Handler{store: store, meta: meta}
+}
+
+func NewWithCache(store *blobstore.Store, lru *cache.Cache) http.Handler {
+	return &Handler{store: store, cache: lru}
+}
+
+func NewWithMetadataAndCache(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache) http.Handler {
+	return &Handler{store: store, meta: meta, cache: lru}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -107,11 +117,24 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 			err = metadataErr
 		} else if !exists {
 			err = os.ErrNotExist
+		} else if cached, ok := h.cache.Get(hash); ok {
+			info = metadataInfo
+			setPayloadHeaders(w, info)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(cached)
+			return
 		} else {
 			info = metadataInfo
 			reader, _, err = h.store.Open(hash)
 		}
 	} else {
+		if cached, ok := h.cache.Get(hash); ok {
+			info = blobstore.Info{Hash: hash, Size: int64(len(cached))}
+			setPayloadHeaders(w, info)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(cached)
+			return
+		}
 		reader, info, err = h.store.Open(hash)
 	}
 	if err != nil {
@@ -130,6 +153,17 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 
 	setPayloadHeaders(w, info)
 	w.WriteHeader(http.StatusOK)
+	if h.cache.CanStore(info.Size) {
+		data, readErr := io.ReadAll(reader)
+		if readErr != nil {
+			return
+		}
+		_, _ = w.Write(data)
+		if h.cache.Add(hash, data) {
+			h.markCached(hash)
+		}
+		return
+	}
 	_, _ = io.Copy(w, reader)
 }
 
@@ -262,4 +296,16 @@ func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) 
 		return false, blobstore.Info{}, errors.New("metadata size does not match local payload")
 	}
 	return true, info, nil
+}
+
+func (h *Handler) markCached(hash string) {
+	if h.meta == nil {
+		return
+	}
+	record, err := h.meta.GetPayload(hash)
+	if err != nil {
+		return
+	}
+	record.Status = record.Status.WithCache(true)
+	_ = h.meta.PutPayload(record)
 }

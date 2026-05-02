@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"vaps/internal/blobstore"
+	"vaps/internal/cache"
 	"vaps/internal/httpapi"
 	"vaps/internal/metadata"
 )
@@ -252,6 +253,42 @@ func TestGetReturnsNotFoundWhenMetadataMissingEvenIfLocalFileExists(t *testing.T
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("GET status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetFillsCacheAndMarksMetadataCacheBit(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	lru := cache.New(1024, 1024)
+	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
+	if putResponse.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
+	}
+
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
+	}
+	cached, ok := lru.Get(hash)
+	if !ok {
+		t.Fatalf("cache miss after GET, want cached payload")
+	}
+	if !bytes.Equal(cached, payload) {
+		t.Fatalf("cached payload = %q, want %q", string(cached), string(payload))
+	}
+
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		t.Fatalf("GetPayload returned error: %v", err)
+	}
+	if !record.Status.HasCache() {
+		t.Fatalf("metadata status cache bit = false, want true")
 	}
 }
 

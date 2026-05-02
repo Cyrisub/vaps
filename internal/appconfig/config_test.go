@@ -22,10 +22,21 @@ func TestFromArgsUsesDefaults(t *testing.T) {
 	if cfg.MetadataDB != filepath.Join(binDir, "data", "metadata.db") {
 		t.Fatalf("MetadataDB = %q, want data/metadata.db under binary dir", cfg.MetadataDB)
 	}
+	if cfg.CacheBytes != 64*1024*1024 {
+		t.Fatalf("CacheBytes = %d, want 64MiB", cfg.CacheBytes)
+	}
+	if cfg.CacheMaxObjectBytes != 4*1024*1024 {
+		t.Fatalf("CacheMaxObjectBytes = %d, want 4MiB", cfg.CacheMaxObjectBytes)
+	}
 }
 
 func TestFromArgsUsesFlags(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-addr", "127.0.0.1:9000", "-data-dir", "/tmp/vaps"}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{
+		"-addr", "127.0.0.1:9000",
+		"-data-dir", "/tmp/vaps",
+		"-cache-bytes", "1024",
+		"-cache-max-object-bytes", "128",
+	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -37,6 +48,12 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	}
 	if cfg.MetadataDB != "/tmp/vaps/metadata.db" {
 		t.Fatalf("MetadataDB = %q, want /tmp/vaps/metadata.db", cfg.MetadataDB)
+	}
+	if cfg.CacheBytes != 1024 {
+		t.Fatalf("CacheBytes = %d, want 1024", cfg.CacheBytes)
+	}
+	if cfg.CacheMaxObjectBytes != 128 {
+		t.Fatalf("CacheMaxObjectBytes = %d, want 128", cfg.CacheMaxObjectBytes)
 	}
 }
 

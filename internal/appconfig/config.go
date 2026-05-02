@@ -7,9 +7,11 @@ import (
 )
 
 type Config struct {
-	Addr       string
-	DataDir    string
-	MetadataDB string
+	Addr                string
+	DataDir             string
+	MetadataDB          string
+	CacheBytes          int64
+	CacheMaxObjectBytes int64
 }
 
 func FromArgs(args []string) (Config, error) {
@@ -27,6 +29,8 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	flags.StringVar(&cfg.Addr, "addr", ":8588", "HTTP listen address")
 	flags.StringVar(&cfg.DataDir, "data-dir", "data", "payload data directory")
 	flags.StringVar(&metadataDB, "metadata-db", "", "metadata database path")
+	flags.Int64Var(&cfg.CacheBytes, "cache-bytes", 64*1024*1024, "in-memory LRU cache capacity in bytes")
+	flags.Int64Var(&cfg.CacheMaxObjectBytes, "cache-max-object-bytes", 4*1024*1024, "maximum payload size cached in memory")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
