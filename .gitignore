@@ -1,0 +1,16 @@
+# Build output
+/bin/
+/dist/
+
+# Go test and coverage output
+*.test
+*.prof
+coverage.out
+
+# Local environment files
+.env
+.env.*
+
+# OS/editor noise
+.DS_Store
+.vscode
