@@ -7,6 +7,7 @@ import (
 	"vaps/internal/appconfig"
 	"vaps/internal/blobstore"
 	"vaps/internal/httpapi"
+	"vaps/internal/metadata"
 )
 
 func main() {
@@ -15,8 +16,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	handler := httpapi.New(blobstore.New(cfg.DataDir))
-	log.Printf("vaps listening on %s with data dir %s", cfg.Addr, cfg.DataDir)
+	meta, err := metadata.Open(cfg.MetadataDB)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer meta.Close()
+
+	handler := httpapi.NewWithMetadata(blobstore.New(cfg.DataDir), meta)
+	log.Printf("vaps listening on %s with data dir %s and metadata db %s", cfg.Addr, cfg.DataDir, cfg.MetadataDB)
 	if err := http.ListenAndServe(cfg.Addr, handler); err != nil {
 		log.Fatal(err)
 	}

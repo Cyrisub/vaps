@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"vaps/internal/blobstore"
+	"vaps/internal/metadata"
 )
 
 type Handler struct {
 	store *blobstore.Store
+	meta  *metadata.Store
 }
 
 type existsRequest struct {
@@ -34,8 +37,14 @@ type putResponse struct {
 	Stored bool   `json:"stored"`
 }
 
+var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
+
 func New(store *blobstore.Store) http.Handler {
 	return &Handler{store: store}
+}
+
+func NewWithMetadata(store *blobstore.Store, meta *metadata.Store) http.Handler {
+	return &Handler{store: store, meta: meta}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +76,9 @@ func (h *Handler) headPayload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	exists, info, err := h.store.Exists(hash)
+	if h.meta != nil {
+		exists, info, err = h.existsWithMetadata(hash)
+	}
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -84,7 +96,24 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reader, info, err := h.store.Open(hash)
+	var (
+		reader io.ReadCloser
+		info   blobstore.Info
+		err    error
+	)
+	if h.meta != nil {
+		exists, metadataInfo, metadataErr := h.existsWithMetadata(hash)
+		if metadataErr != nil {
+			err = metadataErr
+		} else if !exists {
+			err = os.ErrNotExist
+		} else {
+			info = metadataInfo
+			reader, _, err = h.store.Open(hash)
+		}
+	} else {
+		reader, info, err = h.store.Open(hash)
+	}
 	if err != nil {
 		if errors.Is(err, blobstore.ErrInvalidHash) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -123,6 +152,17 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 	if info.Created {
 		status = http.StatusCreated
 	}
+	if h.meta != nil {
+		if err := h.meta.PutPayload(metadata.Payload{
+			Hash:      info.Hash,
+			Size:      info.Size,
+			Local:     metadata.LocalCommitted,
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	writeJSON(w, status, putResponse{Hash: info.Hash, Size: info.Size, Stored: true})
 }
 
@@ -149,6 +189,13 @@ func (h *Handler) exists(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		exists, info, err := h.store.Exists(hash)
+		if h.meta != nil {
+			exists, info, err = h.existsWithMetadata(hash)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				writeStoreError(w, err)
+				return
+			}
+		}
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -193,4 +240,26 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) {
+	record, err := h.meta.GetPayload(hash)
+	if errors.Is(err, metadata.ErrNotFound) {
+		return false, blobstore.Info{}, nil
+	}
+	if err != nil {
+		return false, blobstore.Info{}, err
+	}
+
+	exists, info, err := h.store.Exists(hash)
+	if err != nil {
+		return false, blobstore.Info{}, err
+	}
+	if !exists {
+		return false, blobstore.Info{}, errLocalPayloadMissing
+	}
+	if info.Size != record.Size {
+		return false, blobstore.Info{}, errors.New("metadata size does not match local payload")
+	}
+	return true, info, nil
 }

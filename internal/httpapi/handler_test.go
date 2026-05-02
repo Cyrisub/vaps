@@ -8,10 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"vaps/internal/blobstore"
 	"vaps/internal/httpapi"
+	"vaps/internal/metadata"
 )
 
 func TestHealthReturnsOK(t *testing.T) {
@@ -163,6 +165,79 @@ func TestInvalidHashReturnsBadRequest(t *testing.T) {
 	}
 }
 
+func TestPutWritesMetadataRecord(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	handler := httpapi.NewWithMetadata(store, meta)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d; body=%q", response.Code, http.StatusCreated, response.Body.String())
+	}
+
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		t.Fatalf("GetPayload returned error: %v", err)
+	}
+	if record.Hash != hash {
+		t.Fatalf("metadata hash = %q, want %q", record.Hash, hash)
+	}
+	if record.Size != int64(len(payload)) {
+		t.Fatalf("metadata size = %d, want %d", record.Size, len(payload))
+	}
+	if record.Local != metadata.LocalCommitted {
+		t.Fatalf("metadata local state = %q, want %q", record.Local, metadata.LocalCommitted)
+	}
+}
+
+func TestHeadReturnsServerErrorWhenMetadataExistsButLocalFileMissing(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	handler := httpapi.NewWithMetadata(store, meta)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	if putResponse.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
+	}
+	path, err := store.Path(hash)
+	if err != nil {
+		t.Fatalf("Path returned error: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove blob: %v", err)
+	}
+
+	headResponse := httptest.NewRecorder()
+	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+hash, nil))
+	if headResponse.Code != http.StatusInternalServerError {
+		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestGetReturnsNotFoundWhenMetadataMissingEvenIfLocalFileExists(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	handler := httpapi.NewWithMetadata(store, meta)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	if _, err := store.Put(hash, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("store Put returned error: %v", err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?hash="+hash, nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("GET status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
 type existsResponse struct {
 	Items map[string]existsItem `json:"items"`
 }
@@ -181,4 +256,19 @@ type putResponse struct {
 func ioHash(payload []byte) string {
 	sum := sha1.Sum(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func openMetadata(t *testing.T) *metadata.Store {
+	t.Helper()
+
+	store, err := metadata.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatalf("open metadata: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close metadata: %v", err)
+		}
+	})
+	return store
 }
