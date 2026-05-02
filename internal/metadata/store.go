@@ -13,16 +13,86 @@ import (
 var ErrNotFound = errors.New("metadata record not found")
 
 const (
-	LocalCommitted = "committed"
-
 	payloadBucket = "payloads"
 )
 
+type PayloadStatus uint8
+
+const (
+	StatusLocal    PayloadStatus = 1 << 0
+	StatusCache    PayloadStatus = 1 << 1
+	StatusCorrupt  PayloadStatus = 1 << 4
+	StatusReadonly PayloadStatus = 1 << 5
+
+	backupShift = 2
+	backupMask  = PayloadStatus(0b11 << backupShift)
+)
+
+type BackupStatus uint8
+
+const (
+	BackupNone BackupStatus = iota
+	BackupPending
+	Backuped
+	BackupFailed
+)
+
+func (s PayloadStatus) HasLocal() bool {
+	return s&StatusLocal != 0
+}
+
+func (s PayloadStatus) HasCache() bool {
+	return s&StatusCache != 0
+}
+
+func (s PayloadStatus) IsCorrupt() bool {
+	return s&StatusCorrupt != 0
+}
+
+func (s PayloadStatus) IsReadonly() bool {
+	return s&StatusReadonly != 0
+}
+
+func (s PayloadStatus) Backup() BackupStatus {
+	return BackupStatus((s & backupMask) >> backupShift)
+}
+
+func (s PayloadStatus) WithCache(enabled bool) PayloadStatus {
+	if enabled {
+		return s | StatusCache
+	}
+	return s &^ StatusCache
+}
+
+func (s PayloadStatus) WithReadonly(enabled bool) PayloadStatus {
+	if enabled {
+		return s | StatusReadonly
+	}
+	return s &^ StatusReadonly
+}
+
+func (s PayloadStatus) WithBackup(backup BackupStatus) PayloadStatus {
+	return (s &^ backupMask) | PayloadStatus(backup&0b11)<<backupShift
+}
+
+func (s BackupStatus) String() string {
+	switch s {
+	case BackupPending:
+		return "pending"
+	case Backuped:
+		return "backuped"
+	case BackupFailed:
+		return "failed"
+	default:
+		return "none"
+	}
+}
+
 type Payload struct {
-	Hash      string    `json:"hash"`
-	Size      int64     `json:"size"`
-	Local     string    `json:"local"`
-	CreatedAt time.Time `json:"created_at"`
+	Hash      string        `json:"hash"`
+	Size      int64         `json:"size"`
+	Status    PayloadStatus `json:"status"`
+	CreatedAt time.Time     `json:"created_at"`
 }
 
 type Store struct {

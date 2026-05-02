@@ -156,7 +156,7 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 		if err := h.meta.PutPayload(metadata.Payload{
 			Hash:      info.Hash,
 			Size:      info.Size,
-			Local:     metadata.LocalCommitted,
+			Status:    metadata.StatusLocal,
 			CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -210,9 +210,9 @@ func (h *Handler) exists(w http.ResponseWriter, r *http.Request) {
 }
 
 func queryHash(w http.ResponseWriter, r *http.Request) (string, bool) {
-	hash := r.URL.Query().Get("hash")
+	hash := r.URL.Query().Get("iohash")
 	if !blobstore.ValidHash(hash) {
-		http.Error(w, "invalid hash", http.StatusBadRequest)
+		http.Error(w, "invalid iohash", http.StatusBadRequest)
 		return "", false
 	}
 	return hash, true

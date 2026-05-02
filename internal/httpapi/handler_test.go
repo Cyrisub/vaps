@@ -36,13 +36,13 @@ func TestPutHeadAndGetPayload(t *testing.T) {
 	hash := ioHash(payload)
 
 	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
 	if putResponse.Code != http.StatusCreated {
 		t.Fatalf("PUT status = %d, want %d; body=%q", putResponse.Code, http.StatusCreated, putResponse.Body.String())
 	}
 
 	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
 	if headResponse.Code != http.StatusOK {
 		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusOK)
 	}
@@ -54,7 +54,7 @@ func TestPutHeadAndGetPayload(t *testing.T) {
 	}
 
 	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
 	if getResponse.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
 	}
@@ -71,7 +71,7 @@ func TestPutRejectsHashMismatch(t *testing.T) {
 	handler := httpapi.New(blobstore.New(t.TempDir()))
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+ioHash([]byte("hello")), bytes.NewReader([]byte("goodbye"))))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+ioHash([]byte("hello")), bytes.NewReader([]byte("goodbye"))))
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
@@ -84,13 +84,13 @@ func TestPutExistingPayloadReturnsStoredTrue(t *testing.T) {
 	hash := ioHash(payload)
 
 	first := httptest.NewRecorder()
-	handler.ServeHTTP(first, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first PUT status = %d, want %d", first.Code, http.StatusCreated)
 	}
 
 	second := httptest.NewRecorder()
-	handler.ServeHTTP(second, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	handler.ServeHTTP(second, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
 	if second.Code != http.StatusOK {
 		t.Fatalf("second PUT status = %d, want %d", second.Code, http.StatusOK)
 	}
@@ -109,13 +109,13 @@ func TestMissingPayloadReturnsNotFound(t *testing.T) {
 	hash := ioHash([]byte("missing"))
 
 	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
 	if headResponse.Code != http.StatusNotFound {
 		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusNotFound)
 	}
 
 	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
 	if getResponse.Code != http.StatusNotFound {
 		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusNotFound)
 	}
@@ -127,7 +127,7 @@ func TestExistsReturnsMapByHash(t *testing.T) {
 	missing := ioHash([]byte("missing"))
 
 	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+existing, bytes.NewReader([]byte("hello"))))
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+existing, bytes.NewReader([]byte("hello"))))
 	if putResponse.Code != http.StatusCreated {
 		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
 	}
@@ -158,7 +158,18 @@ func TestInvalidHashReturnsBadRequest(t *testing.T) {
 	handler := httpapi.New(blobstore.New(t.TempDir()))
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/payload?hash=bad", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash=bad", nil))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHashQueryParameterIsNotAccepted(t *testing.T) {
+	handler := httpapi.New(blobstore.New(t.TempDir()))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+ioHash([]byte("hello")), nil))
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
@@ -173,7 +184,7 @@ func TestPutWritesMetadataRecord(t *testing.T) {
 	hash := ioHash(payload)
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
 	if response.Code != http.StatusCreated {
 		t.Fatalf("PUT status = %d, want %d; body=%q", response.Code, http.StatusCreated, response.Body.String())
 	}
@@ -188,8 +199,14 @@ func TestPutWritesMetadataRecord(t *testing.T) {
 	if record.Size != int64(len(payload)) {
 		t.Fatalf("metadata size = %d, want %d", record.Size, len(payload))
 	}
-	if record.Local != metadata.LocalCommitted {
-		t.Fatalf("metadata local state = %q, want %q", record.Local, metadata.LocalCommitted)
+	if record.Status != metadata.StatusLocal {
+		t.Fatalf("metadata status = %v, want %v", record.Status, metadata.StatusLocal)
+	}
+	if !record.Status.HasLocal() {
+		t.Fatalf("metadata status does not contain local bit")
+	}
+	if record.Status.Backup() != metadata.BackupNone {
+		t.Fatalf("metadata backup status = %v, want %v", record.Status.Backup(), metadata.BackupNone)
 	}
 }
 
@@ -201,7 +218,7 @@ func TestHeadReturnsServerErrorWhenMetadataExistsButLocalFileMissing(t *testing.
 	hash := ioHash(payload)
 
 	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?hash="+hash, bytes.NewReader(payload)))
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
 	if putResponse.Code != http.StatusCreated {
 		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
 	}
@@ -214,7 +231,7 @@ func TestHeadReturnsServerErrorWhenMetadataExistsButLocalFileMissing(t *testing.
 	}
 
 	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
 	if headResponse.Code != http.StatusInternalServerError {
 		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusInternalServerError)
 	}
@@ -232,7 +249,7 @@ func TestGetReturnsNotFoundWhenMetadataMissingEvenIfLocalFileExists(t *testing.T
 	}
 
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?hash="+hash, nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("GET status = %d, want %d", response.Code, http.StatusNotFound)
 	}
