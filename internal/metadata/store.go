@@ -95,6 +95,12 @@ type Payload struct {
 	CreatedAt time.Time     `json:"created_at"`
 }
 
+type Stats struct {
+	PayloadCount int64 `json:"payload_count"`
+	TotalBytes   int64 `json:"total_bytes"`
+	CachedCount  int64 `json:"cached_count"`
+}
+
 type Store struct {
 	db *bbolt.DB
 }
@@ -144,6 +150,29 @@ func (s *Store) GetPayload(hash string) (Payload, error) {
 		return Payload{}, err
 	}
 	return payload, nil
+}
+
+func (s *Store) Stats() (Stats, error) {
+	var stats Stats
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(payloadBucket))
+		return bucket.ForEach(func(_, value []byte) error {
+			var payload Payload
+			if err := json.Unmarshal(value, &payload); err != nil {
+				return err
+			}
+			stats.PayloadCount++
+			stats.TotalBytes += payload.Size
+			if payload.Status.HasCache() {
+				stats.CachedCount++
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return Stats{}, err
+	}
+	return stats, nil
 }
 
 func (s *Store) init() error {

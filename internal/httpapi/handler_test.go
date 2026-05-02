@@ -292,6 +292,66 @@ func TestGetFillsCacheAndMarksMetadataCacheBit(t *testing.T) {
 	}
 }
 
+func TestDashboardStatsReturnsMetadataAndCacheStats(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	lru := cache.New(1024, 1024)
+	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
+	if putResponse.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
+	}
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/dashboard/stats", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var got dashboardStats
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Metadata.PayloadCount != 1 {
+		t.Fatalf("PayloadCount = %d, want 1", got.Metadata.PayloadCount)
+	}
+	if got.Metadata.TotalBytes != 5 {
+		t.Fatalf("TotalBytes = %d, want 5", got.Metadata.TotalBytes)
+	}
+	if got.Cache.Entries != 1 {
+		t.Fatalf("Cache entries = %d, want 1", got.Cache.Entries)
+	}
+	if got.Cache.UsedBytes != 5 {
+		t.Fatalf("Cache used bytes = %d, want 5", got.Cache.UsedBytes)
+	}
+}
+
+func TestDashboardReturnsHTML(t *testing.T) {
+	handler := httpapi.New(blobstore.New(t.TempDir()))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/html", got)
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("vaps dashboard")) {
+		t.Fatalf("dashboard body does not contain title: %q", response.Body.String())
+	}
+}
+
 type existsResponse struct {
 	Items map[string]existsItem `json:"items"`
 }
@@ -305,6 +365,17 @@ type putResponse struct {
 	Hash   string `json:"hash"`
 	Size   int64  `json:"size"`
 	Stored bool   `json:"stored"`
+}
+
+type dashboardStats struct {
+	Metadata struct {
+		PayloadCount int64 `json:"payload_count"`
+		TotalBytes   int64 `json:"total_bytes"`
+	} `json:"metadata"`
+	Cache struct {
+		Entries   int   `json:"entries"`
+		UsedBytes int64 `json:"used_bytes"`
+	} `json:"cache"`
 }
 
 func ioHash(payload []byte) string {

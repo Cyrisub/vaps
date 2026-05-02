@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"html/template"
 	"io"
 	"net/http"
 	"os"
@@ -39,7 +40,26 @@ type putResponse struct {
 	Stored bool   `json:"stored"`
 }
 
+type dashboardStats struct {
+	Metadata metadata.Stats `json:"metadata"`
+	Cache    cache.Stats    `json:"cache"`
+}
+
 var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
+
+var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>vaps dashboard</title>
+</head>
+<body>
+  <h1>vaps dashboard</h1>
+  <p>Read-only payload server statistics.</p>
+  <pre id="stats">{{ . }}</pre>
+</body>
+</html>
+`))
 
 func New(store *blobstore.Store) http.Handler {
 	return &Handler{store: store}
@@ -61,6 +81,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/health":
 		h.health(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard":
+		h.dashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/stats":
+		h.dashboardStats(w)
 	case r.URL.Path == "/v1/payload" && r.Method == http.MethodHead:
 		h.headPayload(w, r)
 	case r.URL.Path == "/v1/payload" && r.Method == http.MethodGet:
@@ -78,6 +102,26 @@ func (h *Handler) health(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, "ok\n")
+}
+
+func (h *Handler) dashboard(w http.ResponseWriter) {
+	stats, err := h.collectDashboardStats()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = dashboardTemplate.Execute(w, stats)
+}
+
+func (h *Handler) dashboardStats(w http.ResponseWriter) {
+	stats, err := h.collectDashboardStats()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (h *Handler) headPayload(w http.ResponseWriter, r *http.Request) {
@@ -308,4 +352,17 @@ func (h *Handler) markCached(hash string) {
 	}
 	record.Status = record.Status.WithCache(true)
 	_ = h.meta.PutPayload(record)
+}
+
+func (h *Handler) collectDashboardStats() (dashboardStats, error) {
+	stats := dashboardStats{}
+	if h.meta != nil {
+		metadataStats, err := h.meta.Stats()
+		if err != nil {
+			return dashboardStats{}, err
+		}
+		stats.Metadata = metadataStats
+	}
+	stats.Cache = h.cache.Stats()
+	return stats, nil
 }

@@ -79,3 +79,33 @@ func TestCacheCanStoreRespectsCapacityAndObjectLimit(t *testing.T) {
 		t.Fatalf("disabled cache CanStore(1) = true, want false")
 	}
 }
+
+func TestCacheStatsTracksEntriesBytesAndHitRate(t *testing.T) {
+	c := cache.New(16, 16)
+	c.Add("a", []byte("hello"))
+	c.Add("b", []byte("world"))
+
+	if _, ok := c.Get("a"); !ok {
+		t.Fatalf("Get(a) ok = false, want true")
+	}
+	if _, ok := c.Get("missing"); ok {
+		t.Fatalf("Get(missing) ok = true, want false")
+	}
+
+	stats := c.Stats()
+	if stats.Entries != 2 {
+		t.Fatalf("Entries = %d, want 2", stats.Entries)
+	}
+	if stats.UsedBytes != 10 {
+		t.Fatalf("UsedBytes = %d, want 10", stats.UsedBytes)
+	}
+	if stats.MaxBytes != 16 {
+		t.Fatalf("MaxBytes = %d, want 16", stats.MaxBytes)
+	}
+	if stats.Hits != 1 {
+		t.Fatalf("Hits = %d, want 1", stats.Hits)
+	}
+	if stats.Misses != 1 {
+		t.Fatalf("Misses = %d, want 1", stats.Misses)
+	}
+}

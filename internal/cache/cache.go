@@ -10,8 +10,19 @@ type Cache struct {
 	maxBytes       int64
 	maxObjectBytes int64
 	usedBytes      int64
+	hits           int64
+	misses         int64
 	items          map[string]*list.Element
 	lru            *list.List
+}
+
+type Stats struct {
+	Entries        int   `json:"entries"`
+	UsedBytes      int64 `json:"used_bytes"`
+	MaxBytes       int64 `json:"max_bytes"`
+	MaxObjectBytes int64 `json:"max_object_bytes"`
+	Hits           int64 `json:"hits"`
+	Misses         int64 `json:"misses"`
 }
 
 type entry struct {
@@ -68,11 +79,30 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 
 	element, ok := c.items[key]
 	if !ok {
+		c.misses++
 		return nil, false
 	}
+	c.hits++
 	c.lru.MoveToFront(element)
 	value := element.Value.(entry)
 	return append([]byte(nil), value.data...), true
+}
+
+func (c *Cache) Stats() Stats {
+	if c == nil {
+		return Stats{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return Stats{
+		Entries:        len(c.items),
+		UsedBytes:      c.usedBytes,
+		MaxBytes:       c.maxBytes,
+		MaxObjectBytes: c.maxObjectBytes,
+		Hits:           c.hits,
+		Misses:         c.misses,
+	}
 }
 
 func (c *Cache) removeOldest() {

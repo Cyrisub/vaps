@@ -69,6 +69,38 @@ func TestGetPayloadReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestStatsCountsPayloadsAndBytes(t *testing.T) {
+	store, err := metadata.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	records := []metadata.Payload{
+		{Hash: helloHash, Size: 5, Status: metadata.StatusLocal, CreatedAt: time.Unix(1, 0).UTC()},
+		{Hash: "7c211433f02071597741e6ff5a8ea34789abbf43", Size: 7, Status: metadata.StatusLocal.WithCache(true), CreatedAt: time.Unix(2, 0).UTC()},
+	}
+	for _, record := range records {
+		if err := store.PutPayload(record); err != nil {
+			t.Fatalf("PutPayload returned error: %v", err)
+		}
+	}
+
+	stats, err := store.Stats()
+	if err != nil {
+		t.Fatalf("Stats returned error: %v", err)
+	}
+	if stats.PayloadCount != 2 {
+		t.Fatalf("PayloadCount = %d, want 2", stats.PayloadCount)
+	}
+	if stats.TotalBytes != 12 {
+		t.Fatalf("TotalBytes = %d, want 12", stats.TotalBytes)
+	}
+	if stats.CachedCount != 1 {
+		t.Fatalf("CachedCount = %d, want 1", stats.CachedCount)
+	}
+}
+
 func TestPayloadStatusBitfield(t *testing.T) {
 	status := metadata.StatusLocal.
 		WithCache(true).
