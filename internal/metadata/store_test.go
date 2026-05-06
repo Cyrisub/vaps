@@ -101,6 +101,57 @@ func TestStatsCountsPayloadsAndBytes(t *testing.T) {
 	}
 }
 
+func TestQueryPayloadsFiltersAndPaginates(t *testing.T) {
+	store, err := metadata.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	backupPending := metadata.BackupPending
+	minSize := int64(8)
+	maxSize := int64(15)
+	records := []metadata.Payload{
+		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 5, Status: metadata.StatusLocal, CreatedAt: time.Unix(1, 0).UTC()},
+		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabc1", Size: 10, Status: metadata.StatusLocal.WithCache(true).WithBackup(backupPending), CreatedAt: time.Unix(2, 0).UTC()},
+		{Hash: "ccccccccccccccccccccccccccccccccccccabc2", Size: 20, Status: metadata.StatusLocal.WithReadonly(true).WithBackup(metadata.BackupFailed), CreatedAt: time.Unix(3, 0).UTC()},
+	}
+	for _, record := range records {
+		if err := store.PutPayload(record); err != nil {
+			t.Fatalf("PutPayload returned error: %v", err)
+		}
+	}
+
+	filtered, err := store.QueryPayloads(metadata.PayloadQuery{
+		HashContains: "abc",
+		RequireCache: true,
+		Backup:       &backupPending,
+		MinSize:      &minSize,
+		MaxSize:      &maxSize,
+		Limit:        10,
+	})
+	if err != nil {
+		t.Fatalf("QueryPayloads returned error: %v", err)
+	}
+	if filtered.Total != 1 {
+		t.Fatalf("filtered Total = %d, want 1", filtered.Total)
+	}
+	if len(filtered.Items) != 1 || filtered.Items[0].Hash != records[1].Hash {
+		t.Fatalf("filtered Items = %+v, want only %s", filtered.Items, records[1].Hash)
+	}
+
+	paged, err := store.QueryPayloads(metadata.PayloadQuery{Limit: 2, Offset: 1})
+	if err != nil {
+		t.Fatalf("QueryPayloads page returned error: %v", err)
+	}
+	if paged.Total != 3 {
+		t.Fatalf("paged Total = %d, want 3", paged.Total)
+	}
+	if got := []string{paged.Items[0].Hash, paged.Items[1].Hash}; got[0] != records[1].Hash || got[1] != records[2].Hash {
+		t.Fatalf("paged hashes = %v, want second and third records", got)
+	}
+}
+
 func TestPayloadStatusBitfield(t *testing.T) {
 	status := metadata.StatusLocal.
 		WithCache(true).

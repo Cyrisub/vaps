@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"vaps/internal/blobstore"
@@ -347,8 +348,105 @@ func TestDashboardReturnsHTML(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want text/html", got)
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("vaps dashboard")) {
+	if !bytes.Contains(response.Body.Bytes(), []byte("VAPS Dashboard")) {
 		t.Fatalf("dashboard body does not contain title: %q", response.Body.String())
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("vaps dashboard")) {
+		t.Fatalf("dashboard body contains lower-case page title")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("Inter")) {
+		t.Fatalf("dashboard body does not contain preferred font stack")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime")) {
+		t.Fatalf("dashboard body does not contain human-friendly time formatter")
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("{{")) {
+		t.Fatalf("dashboard body contains Go template delimiters")
+	}
+}
+
+func TestDashboardMetadataReturnsHTML(t *testing.T) {
+	handler := httpapi.NewWithMetadata(blobstore.New(t.TempDir()), openMetadata(t))
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/dashboard/metadata", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/html", got)
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("Metadata Browser")) {
+		t.Fatalf("metadata dashboard body does not contain title: %q", response.Body.String())
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("metadata browser")) {
+		t.Fatalf("metadata dashboard body contains lower-case page title")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("Inter")) {
+		t.Fatalf("metadata dashboard body does not contain preferred font stack")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime")) {
+		t.Fatalf("metadata dashboard body does not contain human-friendly time formatter")
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime(item.created_at)")) {
+		t.Fatalf("metadata dashboard does not localize row timestamps in the browser")
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("created_at_human || formatDateTime")) {
+		t.Fatalf("metadata dashboard prefers server-formatted timestamps over browser-local timestamps")
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("{{")) {
+		t.Fatalf("metadata dashboard body contains Go template delimiters")
+	}
+}
+
+func TestDashboardMetadataQueryFiltersRecords(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	lru := cache.New(1024, 1024)
+	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
+	if putResponse.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
+	}
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
+	}
+
+	response := httptest.NewRecorder()
+	path := "/dashboard/metadata/query?q=" + strings.ToUpper(hash[:8]) + "&status=cache&min_size=5&max_size=5&limit=10"
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	var got metadataQueryResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Total != 1 {
+		t.Fatalf("Total = %d, want 1", got.Total)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(got.Items))
+	}
+	if got.Items[0].Hash != hash {
+		t.Fatalf("item hash = %q, want %q", got.Items[0].Hash, hash)
+	}
+	if got.Items[0].SizeHuman != "5 B" {
+		t.Fatalf("item size_human = %q, want 5 B", got.Items[0].SizeHuman)
+	}
+	if got.Items[0].CreatedAtHuman == "" {
+		t.Fatalf("item created_at_human is empty")
+	}
+	if !got.Items[0].StatusFlags.Cache {
+		t.Fatalf("cache flag = false, want true")
 	}
 }
 
@@ -376,6 +474,22 @@ type dashboardStats struct {
 		Entries   int   `json:"entries"`
 		UsedBytes int64 `json:"used_bytes"`
 	} `json:"cache"`
+}
+
+type metadataQueryResponse struct {
+	Items []metadataQueryItem `json:"items"`
+	Total int64               `json:"total"`
+}
+
+type metadataQueryItem struct {
+	Hash           string              `json:"hash"`
+	SizeHuman      string              `json:"size_human"`
+	CreatedAtHuman string              `json:"created_at_human"`
+	StatusFlags    metadataStatusFlags `json:"status_flags"`
+}
+
+type metadataStatusFlags struct {
+	Cache bool `json:"cache"`
 }
 
 func ioHash(payload []byte) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -101,6 +102,26 @@ type Stats struct {
 	CachedCount  int64 `json:"cached_count"`
 }
 
+type PayloadQuery struct {
+	HashContains    string
+	RequireLocal    bool
+	RequireCache    bool
+	RequireCorrupt  bool
+	RequireReadonly bool
+	Backup          *BackupStatus
+	MinSize         *int64
+	MaxSize         *int64
+	Limit           int
+	Offset          int
+}
+
+type PayloadQueryResult struct {
+	Items  []Payload
+	Total  int64
+	Limit  int
+	Offset int
+}
+
 type Store struct {
 	db *bbolt.DB
 }
@@ -175,9 +196,69 @@ func (s *Store) Stats() (Stats, error) {
 	return stats, nil
 }
 
+func (s *Store) QueryPayloads(query PayloadQuery) (PayloadQueryResult, error) {
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	result := PayloadQueryResult{Limit: query.Limit, Offset: query.Offset}
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(payloadBucket))
+		return bucket.ForEach(func(_, value []byte) error {
+			var payload Payload
+			if err := json.Unmarshal(value, &payload); err != nil {
+				return err
+			}
+			if !query.matches(payload) {
+				return nil
+			}
+			result.Total++
+			if int(result.Total) <= query.Offset {
+				return nil
+			}
+			if query.Limit > 0 && len(result.Items) >= query.Limit {
+				return nil
+			}
+			result.Items = append(result.Items, payload)
+			return nil
+		})
+	})
+	if err != nil {
+		return PayloadQueryResult{}, err
+	}
+	return result, nil
+}
+
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(payloadBucket))
 		return err
 	})
+}
+
+func (q PayloadQuery) matches(payload Payload) bool {
+	if q.HashContains != "" && !strings.Contains(payload.Hash, q.HashContains) {
+		return false
+	}
+	if q.RequireLocal && !payload.Status.HasLocal() {
+		return false
+	}
+	if q.RequireCache && !payload.Status.HasCache() {
+		return false
+	}
+	if q.RequireCorrupt && !payload.Status.IsCorrupt() {
+		return false
+	}
+	if q.RequireReadonly && !payload.Status.IsReadonly() {
+		return false
+	}
+	if q.Backup != nil && payload.Status.Backup() != *q.Backup {
+		return false
+	}
+	if q.MinSize != nil && payload.Size < *q.MinSize {
+		return false
+	}
+	if q.MaxSize != nil && payload.Size > *q.MaxSize {
+		return false
+	}
+	return true
 }

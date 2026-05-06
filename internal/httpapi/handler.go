@@ -1,14 +1,15 @@
 package httpapi
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"vaps/internal/blobstore"
@@ -46,21 +47,38 @@ type dashboardStats struct {
 	Cache    cache.Stats    `json:"cache"`
 }
 
+type metadataQueryResponse struct {
+	Items  []metadataQueryItem `json:"items"`
+	Total  int64               `json:"total"`
+	Limit  int                 `json:"limit"`
+	Offset int                 `json:"offset"`
+}
+
+type metadataQueryItem struct {
+	Hash           string                 `json:"hash"`
+	Size           int64                  `json:"size"`
+	SizeHuman      string                 `json:"size_human"`
+	Status         metadata.PayloadStatus `json:"status"`
+	StatusFlags    metadataStatusFlags    `json:"status_flags"`
+	Backup         string                 `json:"backup"`
+	CreatedAt      time.Time              `json:"created_at"`
+	CreatedAtHuman string                 `json:"created_at_human"`
+}
+
+type metadataStatusFlags struct {
+	Local    bool `json:"local"`
+	Cache    bool `json:"cache"`
+	Corrupt  bool `json:"corrupt"`
+	Readonly bool `json:"readonly"`
+}
+
 var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
 
-var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>vaps dashboard</title>
-</head>
-<body>
-  <h1>vaps dashboard</h1>
-  <p>Read-only payload server statistics.</p>
-  <pre id="stats">{{ . }}</pre>
-</body>
-</html>
-`))
+//go:embed dashboard.html
+var dashboardHTML string
+
+//go:embed metadata.html
+var metadataDashboardHTML string
 
 func New(store *blobstore.Store) http.Handler {
 	return &Handler{store: store}
@@ -86,6 +104,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.dashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/stats":
 		h.dashboardStats(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata":
+		h.metadataDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/query":
+		h.metadataQuery(w, r)
 	case r.URL.Path == "/v1/payload" && r.Method == http.MethodHead:
 		h.headPayload(w, r)
 	case r.URL.Path == "/v1/payload" && r.Method == http.MethodGet:
@@ -149,14 +171,15 @@ func (h *Handler) health(w http.ResponseWriter) {
 }
 
 func (h *Handler) dashboard(w http.ResponseWriter) {
-	stats, err := h.collectDashboardStats()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_ = dashboardTemplate.Execute(w, stats)
+	_, _ = io.WriteString(w, dashboardHTML)
+}
+
+func (h *Handler) metadataDashboard(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, metadataDashboardHTML)
 }
 
 func (h *Handler) dashboardStats(w http.ResponseWriter) {
@@ -166,6 +189,189 @@ func (h *Handler) dashboardStats(w http.ResponseWriter) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h *Handler) metadataQuery(w http.ResponseWriter, r *http.Request) {
+	query, err := parseMetadataQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if h.meta == nil {
+		writeJSON(w, http.StatusOK, metadataQueryResponse{Items: []metadataQueryItem{}, Limit: query.Limit, Offset: query.Offset})
+		return
+	}
+	result, err := h.meta.QueryPayloads(query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	items := make([]metadataQueryItem, 0, len(result.Items))
+	for _, payload := range result.Items {
+		items = append(items, newMetadataQueryItem(payload))
+	}
+	writeJSON(w, http.StatusOK, metadataQueryResponse{
+		Items:  items,
+		Total:  result.Total,
+		Limit:  result.Limit,
+		Offset: result.Offset,
+	})
+}
+
+func parseMetadataQuery(r *http.Request) (metadata.PayloadQuery, error) {
+	values := r.URL.Query()
+	query := metadata.PayloadQuery{
+		HashContains: strings.ToLower(strings.TrimSpace(values.Get("q"))),
+		Limit:        100,
+	}
+	if values.Has("limit") {
+		limit, err := parseNonNegativeInt(values.Get("limit"), "limit")
+		if err != nil {
+			return metadata.PayloadQuery{}, err
+		}
+		query.Limit = limit
+	}
+	if query.Limit > 500 {
+		query.Limit = 500
+	}
+	if values.Has("offset") {
+		offset, err := parseNonNegativeInt(values.Get("offset"), "offset")
+		if err != nil {
+			return metadata.PayloadQuery{}, err
+		}
+		query.Offset = offset
+	}
+	if values.Has("min_size") {
+		minSize, err := parseNonNegativeInt64(values.Get("min_size"), "min_size")
+		if err != nil {
+			return metadata.PayloadQuery{}, err
+		}
+		query.MinSize = &minSize
+	}
+	if values.Has("max_size") {
+		maxSize, err := parseNonNegativeInt64(values.Get("max_size"), "max_size")
+		if err != nil {
+			return metadata.PayloadQuery{}, err
+		}
+		query.MaxSize = &maxSize
+	}
+	if query.MinSize != nil && query.MaxSize != nil && *query.MaxSize < *query.MinSize {
+		return metadata.PayloadQuery{}, errors.New("max_size must be greater than or equal to min_size")
+	}
+	if err := applyStatusFilters(&query, values["status"]); err != nil {
+		return metadata.PayloadQuery{}, err
+	}
+	backupValue := strings.TrimSpace(strings.ToLower(values.Get("backup")))
+	if backupValue != "" && backupValue != "all" {
+		backup, err := parseBackupStatus(values.Get("backup"))
+		if err != nil {
+			return metadata.PayloadQuery{}, err
+		}
+		query.Backup = &backup
+	}
+	return query, nil
+}
+
+func applyStatusFilters(query *metadata.PayloadQuery, values []string) error {
+	for _, value := range splitQueryValues(values) {
+		switch value {
+		case "", "all":
+		case "local":
+			query.RequireLocal = true
+		case "cache":
+			query.RequireCache = true
+		case "corrupt":
+			query.RequireCorrupt = true
+		case "readonly":
+			query.RequireReadonly = true
+		default:
+			return errors.New("status must be one of local, cache, corrupt, readonly")
+		}
+	}
+	return nil
+}
+
+func parseBackupStatus(value string) (metadata.BackupStatus, error) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "all":
+		return metadata.BackupNone, nil
+	case "none":
+		return metadata.BackupNone, nil
+	case "pending":
+		return metadata.BackupPending, nil
+	case "backuped":
+		return metadata.Backuped, nil
+	case "failed":
+		return metadata.BackupFailed, nil
+	default:
+		return metadata.BackupNone, errors.New("backup must be one of none, pending, backuped, failed")
+	}
+}
+
+func splitQueryValues(values []string) []string {
+	parts := []string{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			parts = append(parts, strings.TrimSpace(strings.ToLower(part)))
+		}
+	}
+	return parts
+}
+
+func parseNonNegativeInt(value, name string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < 0 {
+		return 0, errors.New(name + " must be a non-negative integer")
+	}
+	return parsed, nil
+}
+
+func parseNonNegativeInt64(value, name string) (int64, error) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, errors.New(name + " must be a non-negative integer")
+	}
+	return parsed, nil
+}
+
+func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
+	return metadataQueryItem{
+		Hash:      payload.Hash,
+		Size:      payload.Size,
+		SizeHuman: formatHumanBytes(payload.Size),
+		Status:    payload.Status,
+		StatusFlags: metadataStatusFlags{
+			Local:    payload.Status.HasLocal(),
+			Cache:    payload.Status.HasCache(),
+			Corrupt:  payload.Status.IsCorrupt(),
+			Readonly: payload.Status.IsReadonly(),
+		},
+		Backup:         payload.Status.Backup().String(),
+		CreatedAt:      payload.CreatedAt,
+		CreatedAtHuman: formatHumanTime(payload.CreatedAt),
+	}
+}
+
+func formatHumanBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return strconv.FormatInt(value, 10) + " B"
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB", "PiB"}
+	scaled := float64(value) / unit
+	unitIndex := 0
+	for scaled >= unit && unitIndex < len(units)-1 {
+		scaled /= unit
+		unitIndex++
+	}
+	return strconv.FormatFloat(scaled, 'f', 1, 64) + " " + units[unitIndex]
+}
+
+func formatHumanTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Local().Format("Jan 2, 2006 15:04:05 MST")
 }
 
 func (h *Handler) headPayload(w http.ResponseWriter, r *http.Request) {
