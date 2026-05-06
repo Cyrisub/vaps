@@ -5,6 +5,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -96,6 +97,49 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func AccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &accessLogResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		started := time.Now()
+		next.ServeHTTP(recorder, r)
+		log.Printf(
+			"access method=%s path=%q status=%d bytes=%d duration=%s remote_addr=%q user_agent=%q",
+			r.Method,
+			r.URL.RequestURI(),
+			recorder.status,
+			recorder.bytes,
+			time.Since(started).Truncate(time.Microsecond),
+			r.RemoteAddr,
+			r.UserAgent(),
+		)
+	})
+}
+
+type accessLogResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int64
+	wroteHeader bool
+}
+
+func (w *accessLogResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *accessLogResponseWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.bytes += int64(n)
+	return n, err
 }
 
 func (h *Handler) health(w http.ResponseWriter) {
