@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
@@ -212,6 +214,74 @@ func TestPutWritesMetadataRecord(t *testing.T) {
 	}
 	if record.BackupStatus != metadata.BackupNone {
 		t.Fatalf("runtime backup status = %v, want %v", record.BackupStatus, metadata.BackupNone)
+	}
+}
+
+func TestPutQueuesBackupAndMarksMetadataPending(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	backend := &fakeBackup{}
+	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, nil, backend)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("PUT status = %d, want %d; body=%q", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if len(backend.enqueued) != 1 || backend.enqueued[0] != hash {
+		t.Fatalf("backup enqueued = %#v, want [%s]", backend.enqueued, hash)
+	}
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		t.Fatalf("GetPayload returned error: %v", err)
+	}
+	if record.Status.HasBackup() {
+		t.Fatalf("metadata backup flag = true, want false before queue flush")
+	}
+	if record.BackupStatus != metadata.BackupPending {
+		t.Fatalf("BackupStatus = %v, want pending", record.BackupStatus)
+	}
+	if record.BackupedAt != nil {
+		t.Fatalf("BackupedAt = %v, want nil before queue flush", record.BackupedAt)
+	}
+}
+
+func TestBackupPayloadEndpointsUseConfiguredBackend(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	backend := &fakeBackup{}
+	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, nil, backend)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+	if _, err := store.Put(hash, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("store Put returned error: %v", err)
+	}
+	if err := meta.PutPayload(metadata.Payload{Hash: hash, Size: int64(len(payload)), Status: metadata.StatusLocal}); err != nil {
+		t.Fatalf("PutPayload returned error: %v", err)
+	}
+
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/backup/payload?iohash="+hash, nil))
+	if putResponse.Code != http.StatusOK {
+		t.Fatalf("backup PUT status = %d, want %d; body=%q", putResponse.Code, http.StatusOK, putResponse.Body.String())
+	}
+
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, httptest.NewRequest(http.MethodGet, "/v1/backup/payloads", nil))
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("backup list status = %d, want %d; body=%q", listResponse.Code, http.StatusOK, listResponse.Body.String())
+	}
+	var got struct {
+		Items []backup.Object `json:"items"`
+		Total int             `json:"total"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].Hash != hash {
+		t.Fatalf("backup list response = %#v", got)
 	}
 }
 
@@ -498,6 +568,47 @@ type metadataStatusFlags struct {
 func ioHash(payload []byte) string {
 	sum := sha1.Sum(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+type fakeBackup struct {
+	puts     []string
+	enqueued []string
+	payloads map[string][]byte
+}
+
+func (f *fakeBackup) Name() string {
+	return "fake"
+}
+
+func (f *fakeBackup) Exists(_ context.Context, hash string) (bool, error) {
+	_, ok := f.payloads[hash]
+	return ok, nil
+}
+
+func (f *fakeBackup) Enqueue(_ context.Context, hash string) error {
+	f.enqueued = append(f.enqueued, hash)
+	return nil
+}
+
+func (f *fakeBackup) Put(_ context.Context, hash string, reader io.Reader) (backup.Object, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return backup.Object{}, err
+	}
+	if f.payloads == nil {
+		f.payloads = map[string][]byte{}
+	}
+	f.puts = append(f.puts, hash)
+	f.payloads[hash] = data
+	return backup.Object{Hash: hash, Path: "blobs/test/" + hash + ".upayload"}, nil
+}
+
+func (f *fakeBackup) List(context.Context) ([]backup.Object, error) {
+	items := make([]backup.Object, 0, len(f.payloads))
+	for hash := range f.payloads {
+		items = append(items, backup.Object{Hash: hash, Path: "blobs/test/" + hash + ".upayload"})
+	}
+	return items, nil
 }
 
 func openMetadata(t *testing.T) *metadata.Store {

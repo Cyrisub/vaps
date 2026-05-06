@@ -13,17 +13,61 @@ make build
 
 The binary is written to `bin/vaps`.
 
-Run the server:
+Run the server with defaults:
 
 ```sh
-./bin/vaps -addr :8588 -data-dir data
+./bin/vaps
 ```
 
+Or use a JSON config file:
+
+```sh
+./bin/vaps -config vaps.json
+```
+
+Example `vaps.json`:
+
+```json
+{
+  "addr": ":8588",
+  "data_dir": "data",
+  "metadata_db": "",
+  "log_dir": "logs",
+  "log_retention_days": 7,
+  "status_log_interval": "1m",
+  "cache": {
+    "bytes": 67108864,
+    "max_object_bytes": 4194304
+  },
+  "backup": {
+    "backend": "svn",
+    "flush_interval": "1m",
+    "max_pending": 100,
+    "svn": {
+      "url": "https://svn.example.com/repo/vaps-backup",
+      "bin": "svn",
+      "mucc_bin": "svnmucc"
+    }
+  }
+}
+```
+
+Command-line flags can still override config values. Flag names are derived from JSON paths, for example `-addr`, `-data-dir`, `-cache-bytes`, `-backup-backend`, `-backup-flush-interval`, `-backup-max-pending`, and `-backup-svn-url`. The legacy `-backup-svnmucc-bin` flag is also accepted.
+
 By default, payload blobs are stored under `data/blobs` and metadata is stored in `data/metadata.db`.
-Use `-metadata-db` to place the metadata database elsewhere.
 Relative paths are resolved from the directory that contains the `vaps` binary, not from the shell's current working directory.
-The in-memory LRU cache defaults to 64 MiB total and caches payloads up to 4 MiB. Use `-cache-bytes` and `-cache-max-object-bytes` to tune it.
-Access logs are written for every HTTP request. Status logs are written every minute by default; use `-status-log-interval` to tune the interval or `-status-log-interval 0` to disable them. Logs are written to stderr and to `logs/vaps-YYYY-MM-DD.log` beside the binary by default. Use `-log-dir` to choose a different log directory and `-log-retention-days` to tune daily log cleanup.
+The in-memory LRU cache defaults to 64 MiB total and caches payloads up to 4 MiB.
+Access logs are written for every HTTP request. Status logs are written every minute by default; set `status_log_interval` to `"0s"` or use `-status-log-interval 0s` to disable them. Logs are written to stderr and to `logs/vaps-YYYY-MM-DD.log` beside the binary by default.
+
+## Backup
+
+Backup support is optional. Enable the SVN backend with `backup.backend` and `backup.svn.url` in `vaps.json`, or override them from the command line:
+
+```sh
+./bin/vaps -config vaps.json -backup-backend svn -backup-svn-url https://svn.example.com/repo/vaps-backup
+```
+
+The SVN backend stores payloads with the same relative path rule as local blobs: `blobs/<hash[0:2]>/<hash[2:4]>/<hash>.upayload`. It uses `svn list`/`svn info` for remote inspection and `svnmucc` for commits. Payload uploads are queued as `pending` and flushed in batches when `backup.flush_interval` elapses or `backup.max_pending` is reached, reducing small SVN commits. Set `backup.svn.bin` and `backup.svn.mucc_bin`, or use command-line overrides, to choose different binary names when needed.
 
 ## HTTP API
 
@@ -66,6 +110,14 @@ Payload APIs identify objects with the `iohash` query parameter. An `iohash` is 
   ```json
   {"items":{"<sha1>":{"exists":true,"size":123},"<sha1>":{"exists":false}}}
   ```
+
+- `GET /v1/backup/payloads`
+
+  Lists payload objects currently visible in the configured backup backend.
+
+- `PUT /v1/backup/payload?iohash=<sha1>`
+
+  Uploads an existing local payload to the configured backup backend.
 
 - `GET /dashboard`
 

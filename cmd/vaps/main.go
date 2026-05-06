@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"vaps/internal/appconfig"
+	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
@@ -57,9 +58,15 @@ func run() int {
 	}
 	defer meta.Close()
 
-	lru := cache.New(cfg.CacheBytes, cfg.CacheMaxObjectBytes)
-	handler := httpapi.AccessLog(httpapi.NewWithMetadataAndCache(blobstore.New(cfg.DataDir), meta, lru))
-	startStatusLogger(ctx, cfg.StatusLogInterval, meta, lru)
+	store := blobstore.New(cfg.DataDir)
+	lru := cache.New(cfg.Cache.Bytes, cfg.Cache.MaxObjectBytes)
+	backupBackend, err := setupBackup(ctx, cfg, store, meta)
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	handler := httpapi.AccessLog(httpapi.NewWithMetadataCacheAndBackup(store, meta, lru, backupBackend))
+	startStatusLogger(ctx, time.Duration(cfg.StatusLogInterval), meta, lru)
 
 	server := &http.Server{
 		Addr:    cfg.Addr,
@@ -86,8 +93,87 @@ func run() int {
 			return 1
 		}
 	}
+	flushBackup(backupBackend)
 	exitCode = 0
 	return exitCode
+}
+
+func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Store, meta *metadata.Store) (backup.Backend, error) {
+	var backend backup.Backend
+	switch strings.ToLower(strings.TrimSpace(cfg.Backup.Backend)) {
+	case "", "none":
+		return nil, nil
+	case "svn":
+		created, err := backup.NewSVNBackend(backup.SVNConfig{
+			URL:        cfg.Backup.SVN.URL,
+			SVNBin:     cfg.Backup.SVN.Bin,
+			SVNMuccBin: cfg.Backup.SVN.MuccBin,
+		})
+		if err != nil {
+			return nil, err
+		}
+		backend = created
+	default:
+		return nil, fmt.Errorf("unsupported backup backend %q", cfg.Backup.Backend)
+	}
+	queue := backup.NewQueue(backend, func(hash string) (io.ReadCloser, error) {
+		reader, _, err := store.Open(hash)
+		return reader, err
+	}, backup.QueueConfig{
+		Interval:   time.Duration(cfg.Backup.FlushInterval),
+		MaxPending: cfg.Backup.MaxPending,
+	}, backup.QueueCallbacks{
+		OnPending:  func(hash string) { markBackupPending(meta, hash) },
+		OnBackuped: func(hash string) { markBackuped(meta, hash) },
+		OnFailed:   func(hash string, err error) { markBackupFailed(meta, hash, err) },
+	})
+	queue.Start(ctx)
+	return queue, nil
+}
+
+func flushBackup(backend backup.Backend) {
+	flusher, ok := backend.(interface {
+		Flush(context.Context) ([]backup.Object, error)
+	})
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := flusher.Flush(ctx); err != nil {
+		log.Printf("backup final flush failed error=%q", err)
+	}
+}
+
+func markBackupPending(meta *metadata.Store, hash string) {
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		return
+	}
+	record.BackupStatus = metadata.BackupPending
+	_ = meta.PutPayload(record)
+}
+
+func markBackuped(meta *metadata.Store, hash string) {
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	record.Status = record.Status.WithBackup(true)
+	record.BackupStatus = metadata.Backuped
+	record.BackupedAt = &now
+	_ = meta.PutPayload(record)
+}
+
+func markBackupFailed(meta *metadata.Store, hash string, err error) {
+	log.Printf("backup payload failed hash=%s error=%q", hash, err)
+	record, getErr := meta.GetPayload(hash)
+	if getErr != nil {
+		return
+	}
+	record.BackupStatus = metadata.BackupFailed
+	_ = meta.PutPayload(record)
 }
 
 func setupLogging(cfg appconfig.Config) (io.WriteCloser, error) {
