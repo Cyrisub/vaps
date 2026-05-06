@@ -77,7 +77,7 @@ type Payload struct {
 	Hash         string        `json:"hash"`
 	Size         int64         `json:"size"`
 	Status       PayloadStatus `json:"status"`
-	BackupStatus BackupStatus  `json:"-"`
+	BackupStatus BackupStatus  `json:"backup_status,omitempty"`
 	CreatedAt    *time.Time    `json:"created_at"`
 	BackupedAt   *time.Time    `json:"backuped_at"`
 }

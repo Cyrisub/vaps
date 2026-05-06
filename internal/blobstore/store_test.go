@@ -99,6 +99,17 @@ func TestPathForHashShardsByPrefix(t *testing.T) {
 	}
 }
 
+func TestRelativePathUsesBlobShardRule(t *testing.T) {
+	got, err := blobstore.RelativePath(helloHash)
+	if err != nil {
+		t.Fatalf("RelativePath returned error: %v", err)
+	}
+	want := "blobs/aa/f4/" + helloHash + ".upayload"
+	if got != want {
+		t.Fatalf("RelativePath = %q, want %q", got, want)
+	}
+}
+
 func TestRejectsInvalidHash(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 

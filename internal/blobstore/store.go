@@ -32,10 +32,18 @@ func New(root string) *Store {
 }
 
 func (s *Store) Path(hash string) (string, error) {
+	relativePath, err := RelativePath(hash)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, filepath.FromSlash(relativePath)), nil
+}
+
+func RelativePath(hash string) (string, error) {
 	if !ValidHash(hash) {
 		return "", ErrInvalidHash
 	}
-	return filepath.Join(s.root, "blobs", hash[:2], hash[2:4], hash+".upayload"), nil
+	return "blobs/" + hash[:2] + "/" + hash[2:4] + "/" + hash + ".upayload", nil
 }
 
 func (s *Store) Put(hash string, reader io.Reader) (Info, error) {

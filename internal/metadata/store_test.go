@@ -215,11 +215,8 @@ func TestPayloadStatusMarshalsAsNumber(t *testing.T) {
 	if decoded["status"] != want {
 		t.Fatalf("encoded status = %v, want %v", decoded["status"], want)
 	}
-	if _, ok := decoded["BackupStatus"]; ok {
-		t.Fatalf("encoded payload contains BackupStatus, want runtime field omitted")
-	}
-	if _, ok := decoded["backup_status"]; ok {
-		t.Fatalf("encoded payload contains backup_status, want runtime field omitted")
+	if decoded["backup_status"] != float64(metadata.BackupPending) {
+		t.Fatalf("encoded backup_status = %v, want %d", decoded["backup_status"], metadata.BackupPending)
 	}
 	if decoded["created_at"] == nil {
 		t.Fatalf("encoded payload missing created_at")
