@@ -31,9 +31,10 @@ func TestFromArgsUsesDefaults(t *testing.T) {
 }
 
 func TestFromArgsUsesFlags(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "vaps")
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
 		"-addr", "127.0.0.1:9000",
-		"-data-dir", "/tmp/vaps",
+		"-data-dir", dataDir,
 		"-cache-bytes", "1024",
 		"-cache-max-object-bytes", "128",
 	}, t.TempDir())
@@ -43,11 +44,12 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	if cfg.Addr != "127.0.0.1:9000" {
 		t.Fatalf("Addr = %q, want 127.0.0.1:9000", cfg.Addr)
 	}
-	if cfg.DataDir != "/tmp/vaps" {
-		t.Fatalf("DataDir = %q, want /tmp/vaps", cfg.DataDir)
+	if cfg.DataDir != dataDir {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, dataDir)
 	}
-	if cfg.MetadataDB != "/tmp/vaps/metadata.db" {
-		t.Fatalf("MetadataDB = %q, want /tmp/vaps/metadata.db", cfg.MetadataDB)
+	wantMetadataDB := filepath.Join(dataDir, "metadata.db")
+	if cfg.MetadataDB != wantMetadataDB {
+		t.Fatalf("MetadataDB = %q, want %q", cfg.MetadataDB, wantMetadataDB)
 	}
 	if cfg.CacheBytes != 1024 {
 		t.Fatalf("CacheBytes = %d, want 1024", cfg.CacheBytes)
@@ -58,12 +60,13 @@ func TestFromArgsUsesFlags(t *testing.T) {
 }
 
 func TestFromArgsAllowsMetadataDBOverride(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-metadata-db", "/tmp/custom.db"}, t.TempDir())
+	metadataDB := filepath.Join(t.TempDir(), "custom.db")
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-metadata-db", metadataDB}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
-	if cfg.MetadataDB != "/tmp/custom.db" {
-		t.Fatalf("MetadataDB = %q, want /tmp/custom.db", cfg.MetadataDB)
+	if cfg.MetadataDB != metadataDB {
+		t.Fatalf("MetadataDB = %q, want %q", cfg.MetadataDB, metadataDB)
 	}
 }
 
@@ -86,14 +89,16 @@ func TestFromArgsWithBaseDirResolvesRelativePathsFromBinaryDir(t *testing.T) {
 }
 
 func TestFromArgsWithBaseDirKeepsAbsolutePaths(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-data-dir", "/tmp/vaps", "-metadata-db", "/tmp/custom.db"}, t.TempDir())
+	dataDir := filepath.Join(t.TempDir(), "vaps")
+	metadataDB := filepath.Join(t.TempDir(), "custom.db")
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-data-dir", dataDir, "-metadata-db", metadataDB}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
-	if cfg.DataDir != "/tmp/vaps" {
-		t.Fatalf("DataDir = %q, want /tmp/vaps", cfg.DataDir)
+	if cfg.DataDir != dataDir {
+		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, dataDir)
 	}
-	if cfg.MetadataDB != "/tmp/custom.db" {
-		t.Fatalf("MetadataDB = %q, want /tmp/custom.db", cfg.MetadataDB)
+	if cfg.MetadataDB != metadataDB {
+		t.Fatalf("MetadataDB = %q, want %q", cfg.MetadataDB, metadataDB)
 	}
 }

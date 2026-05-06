@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"vaps/internal/platform"
 )
 
 var (
@@ -97,7 +99,7 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 		}
 		return Info{}, err
 	}
-	if err := syncDir(filepath.Dir(target)); err != nil {
+	if err := platform.SyncDir(filepath.Dir(target)); err != nil {
 		return Info{}, err
 	}
 
@@ -156,13 +158,4 @@ func (s *Store) stat(hash, path string) (Info, error) {
 		return Info{}, fmt.Errorf("payload path is a directory: %s", path)
 	}
 	return Info{Hash: hash, Size: stat.Size()}, nil
-}
-
-func syncDir(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
