@@ -19,11 +19,13 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 		t.Fatalf("Open returned error: %v", err)
 	}
 	createdAt := time.Unix(123, 0).UTC()
+	backupedAt := time.Unix(456, 0).UTC()
 	record := metadata.Payload{
-		Hash:      helloHash,
-		Size:      5,
-		Status:    metadata.StatusLocal,
-		CreatedAt: createdAt,
+		Hash:       helloHash,
+		Size:       5,
+		Status:     metadata.StatusLocal.WithBackup(true),
+		CreatedAt:  &createdAt,
+		BackupedAt: &backupedAt,
 	}
 	if err := store.PutPayload(record); err != nil {
 		t.Fatalf("PutPayload returned error: %v", err)
@@ -51,8 +53,11 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 	if got.Status != record.Status {
 		t.Fatalf("Status = %v, want %v", got.Status, record.Status)
 	}
-	if !got.CreatedAt.Equal(createdAt) {
-		t.Fatalf("CreatedAt = %s, want %s", got.CreatedAt, createdAt)
+	if got.CreatedAt == nil || !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("CreatedAt = %v, want %s", got.CreatedAt, createdAt)
+	}
+	if got.BackupedAt == nil || !got.BackupedAt.Equal(backupedAt) {
+		t.Fatalf("BackupedAt = %v, want %s", got.BackupedAt, backupedAt)
 	}
 }
 
@@ -77,8 +82,8 @@ func TestStatsCountsPayloadsAndBytes(t *testing.T) {
 	defer store.Close()
 
 	records := []metadata.Payload{
-		{Hash: helloHash, Size: 5, Status: metadata.StatusLocal, CreatedAt: time.Unix(1, 0).UTC()},
-		{Hash: "7c211433f02071597741e6ff5a8ea34789abbf43", Size: 7, Status: metadata.StatusLocal.WithCache(true), CreatedAt: time.Unix(2, 0).UTC()},
+		{Hash: helloHash, Size: 5, Status: metadata.StatusLocal, CreatedAt: timePtr(time.Unix(1, 0).UTC())},
+		{Hash: "7c211433f02071597741e6ff5a8ea34789abbf43", Size: 7, Status: metadata.StatusLocal.WithCache(true), CreatedAt: timePtr(time.Unix(2, 0).UTC())},
 	}
 	for _, record := range records {
 		if err := store.PutPayload(record); err != nil {
@@ -108,13 +113,13 @@ func TestQueryPayloadsFiltersAndPaginates(t *testing.T) {
 	}
 	defer store.Close()
 
-	backupPending := metadata.BackupPending
+	backedUp := true
 	minSize := int64(8)
 	maxSize := int64(15)
 	records := []metadata.Payload{
-		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 5, Status: metadata.StatusLocal, CreatedAt: time.Unix(1, 0).UTC()},
-		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabc1", Size: 10, Status: metadata.StatusLocal.WithCache(true).WithBackup(backupPending), CreatedAt: time.Unix(2, 0).UTC()},
-		{Hash: "ccccccccccccccccccccccccccccccccccccabc2", Size: 20, Status: metadata.StatusLocal.WithReadonly(true).WithBackup(metadata.BackupFailed), CreatedAt: time.Unix(3, 0).UTC()},
+		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 5, Status: metadata.StatusLocal, CreatedAt: timePtr(time.Unix(1, 0).UTC())},
+		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabc1", Size: 10, Status: metadata.StatusLocal.WithCache(true).WithBackup(true), CreatedAt: timePtr(time.Unix(2, 0).UTC()), BackupedAt: timePtr(time.Unix(4, 0).UTC())},
+		{Hash: "ccccccccccccccccccccccccccccccccccccabc2", Size: 20, Status: metadata.StatusLocal.WithBackup(true), CreatedAt: timePtr(time.Unix(3, 0).UTC()), BackupedAt: timePtr(time.Unix(5, 0).UTC())},
 	}
 	for _, record := range records {
 		if err := store.PutPayload(record); err != nil {
@@ -125,7 +130,7 @@ func TestQueryPayloadsFiltersAndPaginates(t *testing.T) {
 	filtered, err := store.QueryPayloads(metadata.PayloadQuery{
 		HashContains: "abc",
 		RequireCache: true,
-		Backup:       &backupPending,
+		Backup:       &backedUp,
 		MinSize:      &minSize,
 		MaxSize:      &maxSize,
 		Limit:        10,
@@ -155,8 +160,7 @@ func TestQueryPayloadsFiltersAndPaginates(t *testing.T) {
 func TestPayloadStatusBitfield(t *testing.T) {
 	status := metadata.StatusLocal.
 		WithCache(true).
-		WithBackup(metadata.BackupPending).
-		WithReadonly(true)
+		WithBackup(true)
 
 	if !status.HasLocal() {
 		t.Fatalf("HasLocal = false, want true")
@@ -164,18 +168,16 @@ func TestPayloadStatusBitfield(t *testing.T) {
 	if !status.HasCache() {
 		t.Fatalf("HasCache = false, want true")
 	}
-	if got := status.Backup(); got != metadata.BackupPending {
-		t.Fatalf("Backup = %v, want %v", got, metadata.BackupPending)
+	if !status.HasBackup() {
+		t.Fatalf("HasBackup = false, want true")
 	}
-	if !status.IsReadonly() {
-		t.Fatalf("IsReadonly = false, want true")
-	}
-	if status.IsCorrupt() {
-		t.Fatalf("IsCorrupt = true, want false")
+	status = status.WithBackup(false)
+	if status.HasBackup() {
+		t.Fatalf("HasBackup = true, want false")
 	}
 }
 
-func TestPayloadStatusBackupStates(t *testing.T) {
+func TestRuntimeBackupStatusStrings(t *testing.T) {
 	tests := []struct {
 		backup metadata.BackupStatus
 		want   string
@@ -187,10 +189,6 @@ func TestPayloadStatusBackupStates(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		status := metadata.StatusLocal.WithBackup(tt.backup)
-		if got := status.Backup(); got != tt.backup {
-			t.Fatalf("Backup = %v, want %v", got, tt.backup)
-		}
 		if got := tt.backup.String(); got != tt.want {
 			t.Fatalf("backup %d String() = %q, want %q", tt.backup, got, tt.want)
 		}
@@ -199,10 +197,12 @@ func TestPayloadStatusBackupStates(t *testing.T) {
 
 func TestPayloadStatusMarshalsAsNumber(t *testing.T) {
 	encoded, err := json.Marshal(metadata.Payload{
-		Hash:      helloHash,
-		Size:      5,
-		Status:    metadata.StatusLocal.WithBackup(metadata.BackupPending),
-		CreatedAt: time.Unix(123, 0).UTC(),
+		Hash:         helloHash,
+		Size:         5,
+		Status:       metadata.StatusLocal.WithBackup(true),
+		BackupStatus: metadata.BackupPending,
+		CreatedAt:    timePtr(time.Unix(123, 0).UTC()),
+		BackupedAt:   timePtr(time.Unix(456, 0).UTC()),
 	})
 	if err != nil {
 		t.Fatalf("Marshal returned error: %v", err)
@@ -211,11 +211,41 @@ func TestPayloadStatusMarshalsAsNumber(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("Unmarshal map returned error: %v", err)
 	}
-	want := float64(metadata.StatusLocal.WithBackup(metadata.BackupPending))
+	want := float64(metadata.StatusLocal.WithBackup(true))
 	if decoded["status"] != want {
 		t.Fatalf("encoded status = %v, want %v", decoded["status"], want)
 	}
-	if _, ok := decoded["storage_status"]; ok {
-		t.Fatalf("encoded payload contains storage_status, want single status field")
+	if _, ok := decoded["BackupStatus"]; ok {
+		t.Fatalf("encoded payload contains BackupStatus, want runtime field omitted")
 	}
+	if _, ok := decoded["backup_status"]; ok {
+		t.Fatalf("encoded payload contains backup_status, want runtime field omitted")
+	}
+	if decoded["created_at"] == nil {
+		t.Fatalf("encoded payload missing created_at")
+	}
+	if decoded["backuped_at"] == nil {
+		t.Fatalf("encoded payload missing backuped_at")
+	}
+}
+
+func TestPayloadTimeFieldsCanBeNull(t *testing.T) {
+	encoded, err := json.Marshal(metadata.Payload{Hash: helloHash, Size: 5, Status: metadata.StatusLocal})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal map returned error: %v", err)
+	}
+	if value, ok := decoded["created_at"]; !ok || value != nil {
+		t.Fatalf("created_at = %v, want null", value)
+	}
+	if value, ok := decoded["backuped_at"]; !ok || value != nil {
+		t.Fatalf("backuped_at = %v, want null", value)
+	}
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
 }

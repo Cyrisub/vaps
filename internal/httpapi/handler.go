@@ -55,21 +55,22 @@ type metadataQueryResponse struct {
 }
 
 type metadataQueryItem struct {
-	Hash           string                 `json:"hash"`
-	Size           int64                  `json:"size"`
-	SizeHuman      string                 `json:"size_human"`
-	Status         metadata.PayloadStatus `json:"status"`
-	StatusFlags    metadataStatusFlags    `json:"status_flags"`
-	Backup         string                 `json:"backup"`
-	CreatedAt      time.Time              `json:"created_at"`
-	CreatedAtHuman string                 `json:"created_at_human"`
+	Hash            string                 `json:"hash"`
+	Size            int64                  `json:"size"`
+	SizeHuman       string                 `json:"size_human"`
+	Status          metadata.PayloadStatus `json:"status"`
+	StatusFlags     metadataStatusFlags    `json:"status_flags"`
+	Backup          string                 `json:"backup"`
+	CreatedAt       *time.Time             `json:"created_at"`
+	CreatedAtHuman  string                 `json:"created_at_human"`
+	BackupedAt      *time.Time             `json:"backuped_at"`
+	BackupedAtHuman string                 `json:"backuped_at_human"`
 }
 
 type metadataStatusFlags struct {
-	Local    bool `json:"local"`
-	Cache    bool `json:"cache"`
-	Corrupt  bool `json:"corrupt"`
-	Readonly bool `json:"readonly"`
+	Local  bool `json:"local"`
+	Cache  bool `json:"cache"`
+	Backup bool `json:"backup"`
 }
 
 var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
@@ -263,7 +264,7 @@ func parseMetadataQuery(r *http.Request) (metadata.PayloadQuery, error) {
 	}
 	backupValue := strings.TrimSpace(strings.ToLower(values.Get("backup")))
 	if backupValue != "" && backupValue != "all" {
-		backup, err := parseBackupStatus(values.Get("backup"))
+		backup, err := parseBackupFilter(values.Get("backup"))
 		if err != nil {
 			return metadata.PayloadQuery{}, err
 		}
@@ -280,31 +281,24 @@ func applyStatusFilters(query *metadata.PayloadQuery, values []string) error {
 			query.RequireLocal = true
 		case "cache":
 			query.RequireCache = true
-		case "corrupt":
-			query.RequireCorrupt = true
-		case "readonly":
-			query.RequireReadonly = true
+		case "backup":
+			backup := true
+			query.Backup = &backup
 		default:
-			return errors.New("status must be one of local, cache, corrupt, readonly")
+			return errors.New("status must be one of local, cache, backup")
 		}
 	}
 	return nil
 }
 
-func parseBackupStatus(value string) (metadata.BackupStatus, error) {
+func parseBackupFilter(value string) (bool, error) {
 	switch strings.TrimSpace(strings.ToLower(value)) {
-	case "", "all":
-		return metadata.BackupNone, nil
+	case "backuped", "backed", "backed_up":
+		return true, nil
 	case "none":
-		return metadata.BackupNone, nil
-	case "pending":
-		return metadata.BackupPending, nil
-	case "backuped":
-		return metadata.Backuped, nil
-	case "failed":
-		return metadata.BackupFailed, nil
+		return false, nil
 	default:
-		return metadata.BackupNone, errors.New("backup must be one of none, pending, backuped, failed")
+		return false, errors.New("backup must be one of none, backuped")
 	}
 }
 
@@ -335,20 +329,25 @@ func parseNonNegativeInt64(value, name string) (int64, error) {
 }
 
 func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
+	backup := metadata.BackupNone
+	if payload.Status.HasBackup() {
+		backup = metadata.Backuped
+	}
 	return metadataQueryItem{
 		Hash:      payload.Hash,
 		Size:      payload.Size,
 		SizeHuman: formatHumanBytes(payload.Size),
 		Status:    payload.Status,
 		StatusFlags: metadataStatusFlags{
-			Local:    payload.Status.HasLocal(),
-			Cache:    payload.Status.HasCache(),
-			Corrupt:  payload.Status.IsCorrupt(),
-			Readonly: payload.Status.IsReadonly(),
+			Local:  payload.Status.HasLocal(),
+			Cache:  payload.Status.HasCache(),
+			Backup: payload.Status.HasBackup(),
 		},
-		Backup:         payload.Status.Backup().String(),
-		CreatedAt:      payload.CreatedAt,
-		CreatedAtHuman: formatHumanTime(payload.CreatedAt),
+		Backup:          backup.String(),
+		CreatedAt:       payload.CreatedAt,
+		CreatedAtHuman:  formatHumanTime(payload.CreatedAt),
+		BackupedAt:      payload.BackupedAt,
+		BackupedAtHuman: formatHumanTime(payload.BackupedAt),
 	}
 }
 
@@ -367,8 +366,8 @@ func formatHumanBytes(value int64) string {
 	return strconv.FormatFloat(scaled, 'f', 1, 64) + " " + units[unitIndex]
 }
 
-func formatHumanTime(value time.Time) string {
-	if value.IsZero() {
+func formatHumanTime(value *time.Time) string {
+	if value == nil || value.IsZero() {
 		return ""
 	}
 	return value.Local().Format("Jan 2, 2006 15:04:05 MST")
@@ -481,11 +480,12 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	if h.meta != nil {
+		now := time.Now().UTC()
 		if err := h.meta.PutPayload(metadata.Payload{
 			Hash:      info.Hash,
 			Size:      info.Size,
 			Status:    metadata.StatusLocal,
-			CreatedAt: time.Now().UTC(),
+			CreatedAt: &now,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

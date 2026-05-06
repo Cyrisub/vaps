@@ -207,8 +207,11 @@ func TestPutWritesMetadataRecord(t *testing.T) {
 	if !record.Status.HasLocal() {
 		t.Fatalf("metadata status does not contain local bit")
 	}
-	if record.Status.Backup() != metadata.BackupNone {
-		t.Fatalf("metadata backup status = %v, want %v", record.Status.Backup(), metadata.BackupNone)
+	if record.Status.HasBackup() {
+		t.Fatalf("metadata backup flag = true, want false")
+	}
+	if record.BackupStatus != metadata.BackupNone {
+		t.Fatalf("runtime backup status = %v, want %v", record.BackupStatus, metadata.BackupNone)
 	}
 }
 

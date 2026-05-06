@@ -189,8 +189,7 @@
             <option value="">All</option>
             <option value="local">Local</option>
             <option value="cache">Cache</option>
-            <option value="corrupt">Corrupt</option>
-            <option value="readonly">Readonly</option>
+            <option value="backup">Backup</option>
           </select>
         </label>
         <label>
@@ -198,9 +197,7 @@
           <select id="backup" name="backup">
             <option value="">All</option>
             <option value="none">None</option>
-            <option value="pending">Pending</option>
             <option value="backuped">Backuped</option>
-            <option value="failed">Failed</option>
           </select>
         </label>
         <label>
@@ -236,6 +233,7 @@
               <th>Size</th>
               <th>Status</th>
               <th>Backup</th>
+              <th>Backuped</th>
               <th>Created</th>
             </tr>
           </thead>
@@ -311,11 +309,12 @@
           <td>${escapeText(item.size_human || formatBytes(item.size || 0))}</td>
           <td>${statusPills(item.status_flags)}</td>
           <td>${escapeText(item.backup)}</td>
+          <td>${escapeText(formatDateTime(item.backuped_at))}</td>
           <td>${escapeText(formatDateTime(item.created_at))}</td>
         </tr>
       `).join("");
       if (items.length === 0) {
-        rows.innerHTML = '<tr><td colspan="5" class="hint">No metadata records matched the query.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="6" class="hint">No metadata records matched the query.</td></tr>';
       }
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;

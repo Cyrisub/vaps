@@ -20,13 +20,9 @@ const (
 type PayloadStatus uint8
 
 const (
-	StatusLocal    PayloadStatus = 1 << 0
-	StatusCache    PayloadStatus = 1 << 1
-	StatusCorrupt  PayloadStatus = 1 << 4
-	StatusReadonly PayloadStatus = 1 << 5
-
-	backupShift = 2
-	backupMask  = PayloadStatus(0b11 << backupShift)
+	StatusLocal  PayloadStatus = 1 << 0
+	StatusCache  PayloadStatus = 1 << 1
+	StatusBackup PayloadStatus = 1 << 2
 )
 
 type BackupStatus uint8
@@ -46,16 +42,8 @@ func (s PayloadStatus) HasCache() bool {
 	return s&StatusCache != 0
 }
 
-func (s PayloadStatus) IsCorrupt() bool {
-	return s&StatusCorrupt != 0
-}
-
-func (s PayloadStatus) IsReadonly() bool {
-	return s&StatusReadonly != 0
-}
-
-func (s PayloadStatus) Backup() BackupStatus {
-	return BackupStatus((s & backupMask) >> backupShift)
+func (s PayloadStatus) HasBackup() bool {
+	return s&StatusBackup != 0
 }
 
 func (s PayloadStatus) WithCache(enabled bool) PayloadStatus {
@@ -65,15 +53,11 @@ func (s PayloadStatus) WithCache(enabled bool) PayloadStatus {
 	return s &^ StatusCache
 }
 
-func (s PayloadStatus) WithReadonly(enabled bool) PayloadStatus {
+func (s PayloadStatus) WithBackup(enabled bool) PayloadStatus {
 	if enabled {
-		return s | StatusReadonly
+		return s | StatusBackup
 	}
-	return s &^ StatusReadonly
-}
-
-func (s PayloadStatus) WithBackup(backup BackupStatus) PayloadStatus {
-	return (s &^ backupMask) | PayloadStatus(backup&0b11)<<backupShift
+	return s &^ StatusBackup
 }
 
 func (s BackupStatus) String() string {
@@ -90,10 +74,12 @@ func (s BackupStatus) String() string {
 }
 
 type Payload struct {
-	Hash      string        `json:"hash"`
-	Size      int64         `json:"size"`
-	Status    PayloadStatus `json:"status"`
-	CreatedAt time.Time     `json:"created_at"`
+	Hash         string        `json:"hash"`
+	Size         int64         `json:"size"`
+	Status       PayloadStatus `json:"status"`
+	BackupStatus BackupStatus  `json:"-"`
+	CreatedAt    *time.Time    `json:"created_at"`
+	BackupedAt   *time.Time    `json:"backuped_at"`
 }
 
 type Stats struct {
@@ -103,16 +89,14 @@ type Stats struct {
 }
 
 type PayloadQuery struct {
-	HashContains    string
-	RequireLocal    bool
-	RequireCache    bool
-	RequireCorrupt  bool
-	RequireReadonly bool
-	Backup          *BackupStatus
-	MinSize         *int64
-	MaxSize         *int64
-	Limit           int
-	Offset          int
+	HashContains string
+	RequireLocal bool
+	RequireCache bool
+	Backup       *bool
+	MinSize      *int64
+	MaxSize      *int64
+	Limit        int
+	Offset       int
 }
 
 type PayloadQueryResult struct {
@@ -245,13 +229,7 @@ func (q PayloadQuery) matches(payload Payload) bool {
 	if q.RequireCache && !payload.Status.HasCache() {
 		return false
 	}
-	if q.RequireCorrupt && !payload.Status.IsCorrupt() {
-		return false
-	}
-	if q.RequireReadonly && !payload.Status.IsReadonly() {
-		return false
-	}
-	if q.Backup != nil && payload.Status.Backup() != *q.Backup {
+	if q.Backup != nil && payload.Status.HasBackup() != *q.Backup {
 		return false
 	}
 	if q.MinSize != nil && payload.Size < *q.MinSize {
