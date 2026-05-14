@@ -12,7 +12,7 @@ import (
 	"vaps/internal/blobstore"
 )
 
-const helloHash = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+const helloHash = "ea8f163db38682925e4491c5e58d4bb3506ef8c1"
 
 func TestPutStoresPayloadByHash(t *testing.T) {
 	store := blobstore.New(t.TempDir())
@@ -93,7 +93,7 @@ func TestPathForHashShardsByPrefix(t *testing.T) {
 		t.Fatalf("Path returned error: %v", err)
 	}
 
-	want := filepath.Join(root, "blobs", "aa", "f4", helloHash+".upayload")
+	want := filepath.Join(root, "blobs", "ea", "8f", helloHash+".upayload")
 	if got != want {
 		t.Fatalf("Path = %q, want %q", got, want)
 	}
@@ -104,7 +104,7 @@ func TestRelativePathUsesBlobShardRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RelativePath returned error: %v", err)
 	}
-	want := "blobs/aa/f4/" + helloHash + ".upayload"
+	want := "blobs/ea/8f/" + helloHash + ".upayload"
 	if got != want {
 		t.Fatalf("RelativePath = %q, want %q", got, want)
 	}

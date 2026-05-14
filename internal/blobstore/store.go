@@ -1,14 +1,13 @@
 package blobstore
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"vaps/internal/iohash"
 	"vaps/internal/platform"
 )
 
@@ -74,7 +73,7 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 		}
 	}()
 
-	hasher := sha1.New()
+	hasher := iohash.New()
 	size, copyErr := io.Copy(io.MultiWriter(tmp, hasher), reader)
 	if copyErr != nil {
 		_ = tmp.Close()
@@ -88,7 +87,7 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 		return Info{}, err
 	}
 
-	actual := hex.EncodeToString(hasher.Sum(nil))
+	actual := iohash.DigestHex(hasher)
 	if actual != hash {
 		return Info{}, fmt.Errorf("%w: got %s want %s", ErrHashMismatch, actual, hash)
 	}
@@ -150,11 +149,7 @@ func (s *Store) Open(hash string) (io.ReadCloser, Info, error) {
 }
 
 func ValidHash(hash string) bool {
-	if len(hash) != sha1.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(hash)
-	return err == nil
+	return iohash.Valid(hash)
 }
 
 func (s *Store) stat(hash, path string) (Info, error) {

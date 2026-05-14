@@ -3,8 +3,6 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +15,7 @@ import (
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
+	"vaps/internal/iohash"
 	"vaps/internal/metadata"
 )
 
@@ -566,8 +565,7 @@ type metadataStatusFlags struct {
 }
 
 func ioHash(payload []byte) string {
-	sum := sha1.Sum(payload)
-	return hex.EncodeToString(sum[:])
+	return iohash.SumHex(payload)
 }
 
 type fakeBackup struct {

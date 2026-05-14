@@ -8,20 +8,21 @@ import (
 	"testing"
 )
 
-const helloHash = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+const helloHash = "ea8f163db38682925e4491c5e58d4bb3506ef8c1"
 
 func TestSVNListParsesPayloadObjects(t *testing.T) {
 	runner := &fakeRunner{
 		run: func(name string, args ...string) (CommandResult, error) {
-			if name != "svn" || !hasArgs(args, "list", "-R", "https://svn.example/repo/blobs") {
+			if name != "svn" || !hasArgs(args, "list", "-R", "https://svn.example/repo") {
 				t.Fatalf("unexpected command %s %v", name, args)
 			}
+
 			return CommandResult{Stdout: strings.Join([]string{
-				"aa/",
-				"aa/f4/",
-				"aa/f4/" + helloHash + ".upayload",
-				"aa/f4/not-a-payload.txt",
-				"bb/f4/" + helloHash + ".upayload",
+				"ea/",
+				"ea/8f/",
+				"ea/8f/" + helloHash + ".upayload",
+				"ea/8f/not-a-payload.txt",
+				"bb/8f/" + helloHash + ".upayload",
 			}, "\n")}, nil
 		},
 	}
@@ -40,7 +41,7 @@ func TestSVNListParsesPayloadObjects(t *testing.T) {
 	if objects[0].Hash != helloHash {
 		t.Fatalf("Hash = %q, want %q", objects[0].Hash, helloHash)
 	}
-	if objects[0].Path != "blobs/aa/f4/"+helloHash+".upayload" {
+	if objects[0].Path != "ea/8f/"+helloHash+".upayload" {
 		t.Fatalf("Path = %q", objects[0].Path)
 	}
 }
@@ -87,7 +88,7 @@ func TestSVNPutCreatesDirectoriesAndUploadsWithSVNMucc(t *testing.T) {
 					if string(payload) != "hello" {
 						t.Fatalf("uploaded payload = %q, want hello", string(payload))
 					}
-					wantURL := "https://svn.example/repo/blobs/aa/f4/" + helloHash + ".upayload"
+					wantURL := "https://svn.example/repo/ea/8f/" + helloHash + ".upayload"
 					if args[putIndex+2] != wantURL {
 						t.Fatalf("put target = %q, want %q", args[putIndex+2], wantURL)
 					}
@@ -112,7 +113,7 @@ func TestSVNPutCreatesDirectoriesAndUploadsWithSVNMucc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put returned error: %v", err)
 	}
-	if object.Hash != helloHash || object.Path != "blobs/aa/f4/"+helloHash+".upayload" {
+	if object.Hash != helloHash || object.Path != "ea/8f/"+helloHash+".upayload" {
 		t.Fatalf("object = %#v", object)
 	}
 	if runner.count("svnmucc", "mkdir") != 1 {

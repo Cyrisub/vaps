@@ -3,8 +3,6 @@ package backup
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"vaps/internal/blobstore"
+	"vaps/internal/iohash"
 )
 
 var ErrBackupHashMismatch = errors.New("backup payload hash does not match requested iohash")
@@ -93,7 +92,7 @@ func (s *SVNBackend) Name() string {
 }
 
 func (s *SVNBackend) Exists(ctx context.Context, hash string) (bool, error) {
-	rel, err := blobstore.RelativePath(hash)
+	rel, err := payloadPath(hash)
 	if err != nil {
 		return false, err
 	}
@@ -171,7 +170,7 @@ type preparedSVNPayload struct {
 }
 
 func (s *SVNBackend) preparePayload(ctx context.Context, payload Payload) (preparedSVNPayload, error) {
-	rel, err := blobstore.RelativePath(payload.Hash)
+	rel, err := payloadPath(payload.Hash)
 	if err != nil {
 		return preparedSVNPayload{}, err
 	}
@@ -225,7 +224,7 @@ func (s *SVNBackend) cleanupPrepared(payloads []preparedSVNPayload) {
 
 func (s *SVNBackend) List(ctx context.Context) ([]Object, error) {
 	started := time.Now()
-	rootURL := joinURL(s.url, "blobs")
+	rootURL := s.url
 	log.Printf("svn backup list started url=%q", rootURL)
 	result, err := s.runner.Run(ctx, s.svnBin, s.svnArgs("list", "-R", rootURL)...)
 	if err != nil {
@@ -236,7 +235,7 @@ func (s *SVNBackend) List(ctx context.Context) ([]Object, error) {
 
 	seen := map[string]struct{}{}
 	objects := []Object{}
-	for _, line := range strings.Split(result.Stdout, "\n") {
+	for line := range strings.SplitSeq(result.Stdout, "\n") {
 		object, ok := parsePayloadListEntry(line)
 		if !ok {
 			continue
@@ -304,7 +303,7 @@ func (s *SVNBackend) writeTemp(hash string, reader io.Reader) (string, error) {
 		}
 	}()
 
-	hasher := sha1.New()
+	hasher := iohash.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), reader); err != nil {
 		_ = tmp.Close()
 		return "", err
@@ -316,7 +315,7 @@ func (s *SVNBackend) writeTemp(hash string, reader io.Reader) (string, error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	actual := hex.EncodeToString(hasher.Sum(nil))
+	actual := iohash.DigestHex(hasher)
 	if actual != hash {
 		return "", fmt.Errorf("%w: got %s want %s", ErrBackupHashMismatch, actual, hash)
 	}
@@ -362,29 +361,34 @@ func parsePayloadListEntry(entry string) (Object, bool) {
 	if entry == "" || strings.HasSuffix(entry, "/") {
 		return Object{}, false
 	}
-	if !strings.HasPrefix(entry, "blobs/") {
-		entry = "blobs/" + entry
-	}
+	entry = strings.TrimPrefix(entry, "blobs/")
 	parts := strings.Split(entry, "/")
-	if len(parts) != 4 || parts[0] != "blobs" {
+	if len(parts) != 3 {
 		return Object{}, false
 	}
-	if path.Ext(parts[3]) != ".upayload" {
+	if path.Ext(parts[2]) != ".upayload" {
 		return Object{}, false
 	}
-	hash := strings.TrimSuffix(parts[3], ".upayload")
-	if !blobstore.ValidHash(hash) || parts[1] != hash[:2] || parts[2] != hash[2:4] {
+	hash := strings.TrimSuffix(parts[2], ".upayload")
+	if !blobstore.ValidHash(hash) || parts[0] != hash[:2] || parts[1] != hash[2:4] {
 		return Object{}, false
 	}
-	rel, err := blobstore.RelativePath(hash)
+	rel, err := payloadPath(hash)
 	if err != nil {
 		return Object{}, false
 	}
 	return Object{Hash: hash, Path: rel}, true
 }
 
+func payloadPath(hash string) (string, error) {
+	if !blobstore.ValidHash(hash) {
+		return "", blobstore.ErrInvalidHash
+	}
+	return path.Join(hash[:2], hash[2:4], hash+".upayload"), nil
+}
+
 func payloadDirs(hash string) []string {
-	return []string{"blobs", path.Join("blobs", hash[:2]), path.Join("blobs", hash[:2], hash[2:4])}
+	return []string{hash[:2], path.Join(hash[:2], hash[2:4])}
 }
 
 func joinURL(base, rel string) string {
