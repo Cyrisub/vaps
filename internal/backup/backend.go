@@ -21,6 +21,7 @@ type Payload struct {
 type Backend interface {
 	Name() string
 	Exists(ctx context.Context, hash string) (bool, error)
+	Open(ctx context.Context, hash string) (io.ReadCloser, error)
 	Put(ctx context.Context, hash string, reader io.Reader) (Object, error)
 	List(ctx context.Context) ([]Object, error)
 }

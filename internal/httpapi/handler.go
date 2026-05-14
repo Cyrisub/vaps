@@ -321,7 +321,7 @@ func parseBackupFilter(value string) (bool, error) {
 func splitQueryValues(values []string) []string {
 	parts := []string{}
 	for _, value := range values {
-		for _, part := range strings.Split(value, ",") {
+		for part := range strings.SplitSeq(value, ",") {
 			parts = append(parts, strings.TrimSpace(strings.ToLower(part)))
 		}
 	}
@@ -394,18 +394,29 @@ func (h *Handler) headPayload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	exists, info, err := h.store.Exists(hash)
+	var (
+		reader io.ReadCloser
+		info   blobstore.Info
+		err    error
+	)
 	if h.meta != nil {
-		exists, info, err = h.existsWithMetadata(hash)
+		reader, info, err = h.openPayloadWithMetadata(r.Context(), hash)
+	} else {
+		reader, info, err = h.store.Open(hash)
 	}
 	if err != nil {
-		writeStoreError(w, err)
+		if errors.Is(err, blobstore.ErrInvalidHash) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !exists {
-		http.NotFound(w, r)
-		return
-	}
+	_ = reader.Close()
 	setPayloadHeaders(w, info)
 	w.WriteHeader(http.StatusOK)
 }
@@ -421,20 +432,18 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 		err    error
 	)
 	if h.meta != nil {
-		exists, metadataInfo, metadataErr := h.existsWithMetadata(hash)
-		if metadataErr != nil {
-			err = metadataErr
-		} else if !exists {
+		if _, metadataErr := h.meta.GetPayload(hash); errors.Is(metadataErr, metadata.ErrNotFound) {
 			err = os.ErrNotExist
+		} else if metadataErr != nil {
+			err = metadataErr
 		} else if cached, ok := h.cache.Get(hash); ok {
-			info = metadataInfo
+			info = blobstore.Info{Hash: hash, Size: int64(len(cached))}
 			setPayloadHeaders(w, info)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(cached)
 			return
 		} else {
-			info = metadataInfo
-			reader, _, err = h.store.Open(hash)
+			reader, info, err = h.openPayloadWithMetadata(r.Context(), hash)
 		}
 	} else {
 		if cached, ok := h.cache.Get(hash); ok {
@@ -648,12 +657,57 @@ func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) 
 		return false, blobstore.Info{}, err
 	}
 	if !exists {
+		if record.Status.HasBackup() {
+			return true, blobstore.Info{Hash: hash, Size: record.Size}, nil
+		}
 		return false, blobstore.Info{}, errLocalPayloadMissing
 	}
-	if info.Size != record.Size {
+	if record.Status.HasLocal() && info.Size != record.Size {
 		return false, blobstore.Info{}, errors.New("metadata size does not match local payload")
 	}
 	return true, info, nil
+}
+
+func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, error) {
+	record, err := h.meta.GetPayload(hash)
+	if errors.Is(err, metadata.ErrNotFound) {
+		return nil, blobstore.Info{}, os.ErrNotExist
+	}
+	if err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	exists, info, err := h.store.Exists(hash)
+	if err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	if exists {
+		if record.Status.HasLocal() && info.Size != record.Size {
+			return nil, blobstore.Info{}, errors.New("metadata size does not match local payload")
+		}
+		reader, info, err := h.store.Open(hash)
+		return reader, info, err
+	}
+	if !record.Status.HasBackup() {
+		return nil, blobstore.Info{}, errLocalPayloadMissing
+	}
+	return h.restorePayloadFromBackup(ctx, hash)
+}
+
+func (h *Handler) restorePayloadFromBackup(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, error) {
+	if h.backup == nil {
+		return nil, blobstore.Info{}, os.ErrNotExist
+	}
+	backupReader, err := h.backup.Open(ctx, hash)
+	if err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	defer backupReader.Close()
+	info, err := h.store.Put(hash, backupReader)
+	if err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	h.markRestoredLocal(info)
+	return h.store.Open(hash)
 }
 
 func (h *Handler) queueBackup(ctx context.Context, hash string) error {
@@ -700,6 +754,23 @@ func (h *Handler) markCached(hash string) {
 		return
 	}
 	record.Status = record.Status.WithCache(true)
+	_ = h.meta.PutPayload(record)
+}
+
+func (h *Handler) markRestoredLocal(info blobstore.Info) {
+	if h.meta == nil {
+		return
+	}
+	record, err := h.meta.GetPayload(info.Hash)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	record.Size = info.Size
+	record.Status |= metadata.StatusLocal
+	if record.CreatedAt == nil {
+		record.CreatedAt = &now
+	}
 	_ = h.meta.PutPayload(record)
 }
 

@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -20,9 +21,10 @@ func TestSVNListParsesPayloadObjects(t *testing.T) {
 			return CommandResult{Stdout: strings.Join([]string{
 				"ea/",
 				"ea/8f/",
-				"ea/8f/" + helloHash + ".upayload",
-				"ea/8f/not-a-payload.txt",
-				"bb/8f/" + helloHash + ".upayload",
+				"ea/8f/16/",
+				"ea/8f/16/3db38682925e4491c5e58d4bb3506ef8c1.upayload",
+				"ea/8f/16/not-a-payload.txt",
+				"bb/8f/16/not-a-matching-shard.upayload",
 			}, "\n")}, nil
 		},
 	}
@@ -41,7 +43,7 @@ func TestSVNListParsesPayloadObjects(t *testing.T) {
 	if objects[0].Hash != helloHash {
 		t.Fatalf("Hash = %q, want %q", objects[0].Hash, helloHash)
 	}
-	if objects[0].Path != "ea/8f/"+helloHash+".upayload" {
+	if objects[0].Path != "ea/8f/16/3db38682925e4491c5e58d4bb3506ef8c1.upayload" {
 		t.Fatalf("Path = %q", objects[0].Path)
 	}
 }
@@ -63,6 +65,33 @@ func TestSVNExistsMapsNotFoundToFalse(t *testing.T) {
 	}
 	if exists {
 		t.Fatalf("Exists = true, want false")
+	}
+}
+
+func TestSVNOpenDownloadsPayloadWithSVNCat(t *testing.T) {
+	runner := &fakeRunner{
+		run: func(name string, args ...string) (CommandResult, error) {
+			if name != "svn" || !hasArgs(args, "cat", "https://svn.example/repo/ea/8f/16/3db38682925e4491c5e58d4bb3506ef8c1.upayload") {
+				t.Fatalf("unexpected command %s %v", name, args)
+			}
+			return CommandResult{Stdout: "hello"}, nil
+		},
+	}
+	backend, err := NewSVNBackend(SVNConfig{URL: "https://svn.example/repo", Runner: runner})
+	if err != nil {
+		t.Fatalf("NewSVNBackend returned error: %v", err)
+	}
+	reader, err := backend.Open(context.Background(), helloHash)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer reader.Close()
+	payload, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
+	if string(payload) != "hello" {
+		t.Fatalf("payload = %q, want hello", string(payload))
 	}
 }
 
@@ -88,7 +117,7 @@ func TestSVNPutCreatesDirectoriesAndUploadsWithSVNMucc(t *testing.T) {
 					if string(payload) != "hello" {
 						t.Fatalf("uploaded payload = %q, want hello", string(payload))
 					}
-					wantURL := "https://svn.example/repo/ea/8f/" + helloHash + ".upayload"
+					wantURL := "https://svn.example/repo/ea/8f/16/3db38682925e4491c5e58d4bb3506ef8c1.upayload"
 					if args[putIndex+2] != wantURL {
 						t.Fatalf("put target = %q, want %q", args[putIndex+2], wantURL)
 					}
@@ -113,7 +142,7 @@ func TestSVNPutCreatesDirectoriesAndUploadsWithSVNMucc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put returned error: %v", err)
 	}
-	if object.Hash != helloHash || object.Path != "ea/8f/"+helloHash+".upayload" {
+	if object.Hash != helloHash || object.Path != "ea/8f/16/3db38682925e4491c5e58d4bb3506ef8c1.upayload" {
 		t.Fatalf("object = %#v", object)
 	}
 	if runner.count("svnmucc", "mkdir") != 1 {

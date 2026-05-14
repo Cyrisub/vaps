@@ -116,7 +116,9 @@ func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Sto
 	default:
 		return nil, fmt.Errorf("unsupported backup backend %q", cfg.Backup.Backend)
 	}
-	queue := backup.NewQueue(backend, func(hash string) (io.ReadCloser, error) {
+	metadataBackend := backup.NewEmptyMetadataBackend(backend)
+	startBackupMetadataRefresh(ctx, meta, metadataBackend)
+	queue := backup.NewQueue(metadataBackend, func(hash string) (io.ReadCloser, error) {
 		reader, _, err := store.Open(hash)
 		return reader, err
 	}, backup.QueueConfig{
@@ -129,6 +131,63 @@ func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Sto
 	})
 	queue.Start(ctx)
 	return queue, nil
+}
+
+func startBackupMetadataRefresh(ctx context.Context, meta *metadata.Store, backend *backup.MetadataBackend) {
+	go func() {
+		started := time.Now()
+		log.Printf("backup metadata refresh started backend=%q", backend.Name())
+		if err := backend.Refresh(ctx); err != nil {
+			log.Printf("backup metadata refresh failed backend=%q duration=%s error=%q", backend.Name(), time.Since(started).Truncate(time.Millisecond), err)
+			return
+		}
+		if err := mergeBackupMetadata(ctx, meta, backend); err != nil {
+			log.Printf("backup metadata merge failed backend=%q duration=%s error=%q", backend.Name(), time.Since(started).Truncate(time.Millisecond), err)
+			return
+		}
+		log.Printf("backup metadata refresh completed backend=%q count=%d duration=%s", backend.Name(), backend.Count(), time.Since(started).Truncate(time.Millisecond))
+	}()
+}
+
+func mergeBackupMetadata(ctx context.Context, meta *metadata.Store, backend backup.Backend) error {
+	if meta == nil || backend == nil {
+		return nil
+	}
+	objects, err := backend.List(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, object := range objects {
+		record, err := meta.GetPayload(object.Hash)
+		if errors.Is(err, metadata.ErrNotFound) {
+			if err := meta.PutPayload(metadata.Payload{
+				Hash:         object.Hash,
+				Status:       metadata.StatusBackup,
+				BackupStatus: metadata.Backuped,
+				BackupedAt:   &now,
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if record.Status.HasBackup() && record.BackupStatus == metadata.Backuped {
+			continue
+		}
+		record.Status = record.Status.WithBackup(true)
+		record.BackupStatus = metadata.Backuped
+		if record.BackupedAt == nil {
+			record.BackupedAt = &now
+		}
+		if err := meta.PutPayload(record); err != nil {
+			return err
+		}
+	}
+	log.Printf("backup metadata merged records=%d", len(objects))
+	return nil
 }
 
 func flushBackup(backend backup.Backend) {

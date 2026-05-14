@@ -105,6 +105,18 @@ func (s *SVNBackend) Exists(ctx context.Context, hash string) (bool, error) {
 	return exists, nil
 }
 
+func (s *SVNBackend) Open(ctx context.Context, hash string) (io.ReadCloser, error) {
+	rel, err := payloadPath(hash)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.runner.Run(ctx, s.svnBin, s.svnArgs("cat", joinURL(s.url, rel))...)
+	if err != nil {
+		return nil, commandError("svn cat", result, err)
+	}
+	return io.NopCloser(strings.NewReader(result.Stdout)), nil
+}
+
 func (s *SVNBackend) Put(ctx context.Context, hash string, reader io.Reader) (Object, error) {
 	objects, err := s.PutBatch(ctx, []Payload{{Hash: hash, Reader: reader}})
 	if err != nil {
@@ -363,14 +375,14 @@ func parsePayloadListEntry(entry string) (Object, bool) {
 	}
 	entry = strings.TrimPrefix(entry, "blobs/")
 	parts := strings.Split(entry, "/")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return Object{}, false
 	}
-	if path.Ext(parts[2]) != ".upayload" {
+	if path.Ext(parts[3]) != ".upayload" {
 		return Object{}, false
 	}
-	hash := strings.TrimSuffix(parts[2], ".upayload")
-	if !blobstore.ValidHash(hash) || parts[0] != hash[:2] || parts[1] != hash[2:4] {
+	hash := parts[0] + parts[1] + parts[2] + strings.TrimSuffix(parts[3], ".upayload")
+	if !blobstore.ValidHash(hash) || parts[0] != hash[:2] || parts[1] != hash[2:4] || parts[2] != hash[4:6] {
 		return Object{}, false
 	}
 	rel, err := payloadPath(hash)
@@ -384,11 +396,11 @@ func payloadPath(hash string) (string, error) {
 	if !blobstore.ValidHash(hash) {
 		return "", blobstore.ErrInvalidHash
 	}
-	return path.Join(hash[:2], hash[2:4], hash+".upayload"), nil
+	return path.Join(hash[:2], hash[2:4], hash[4:6], hash[6:]+".upayload"), nil
 }
 
 func payloadDirs(hash string) []string {
-	return []string{hash[:2], path.Join(hash[:2], hash[2:4])}
+	return []string{hash[:2], path.Join(hash[:2], hash[2:4]), path.Join(hash[:2], hash[2:4], hash[4:6])}
 }
 
 func joinURL(base, rel string) string {

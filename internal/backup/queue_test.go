@@ -17,9 +17,7 @@ func TestQueueFlushesWhenMaxPendingReached(t *testing.T) {
 	}, QueueConfig{MaxPending: 2}, QueueCallbacks{
 		OnBackuped: func(hash string) { backuped = append(backuped, hash) },
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	queue.Start(ctx)
+	queue.Start(t.Context())
 
 	if err := queue.Enqueue(context.Background(), "a"); err != nil {
 
@@ -73,6 +71,10 @@ type fakeQueueBackend struct {
 func (f *fakeQueueBackend) Name() string { return "fake" }
 
 func (f *fakeQueueBackend) Exists(context.Context, string) (bool, error) { return false, nil }
+
+func (f *fakeQueueBackend) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
 
 func (f *fakeQueueBackend) Put(ctx context.Context, hash string, reader io.Reader) (Object, error) {
 	objects, err := f.PutBatch(ctx, []Payload{{Hash: hash, Reader: reader}})

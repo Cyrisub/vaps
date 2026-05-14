@@ -59,6 +59,10 @@ func (q *Queue) Exists(ctx context.Context, hash string) (bool, error) {
 	return q.backend.Exists(ctx, hash)
 }
 
+func (q *Queue) Open(ctx context.Context, hash string) (io.ReadCloser, error) {
+	return q.backend.Open(ctx, hash)
+}
+
 func (q *Queue) Put(ctx context.Context, hash string, reader io.Reader) (Object, error) {
 	return q.backend.Put(ctx, hash, reader)
 }

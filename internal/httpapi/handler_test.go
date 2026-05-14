@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"vaps/internal/backup"
 	"vaps/internal/blobstore"
@@ -329,6 +330,50 @@ func TestGetReturnsNotFoundWhenMetadataMissingEvenIfLocalFileExists(t *testing.T
 	}
 }
 
+func TestGetRestoresBackupOnlyPayloadToLocalStore(t *testing.T) {
+	store := blobstore.New(t.TempDir())
+	meta := openMetadata(t)
+	payload := []byte("hello")
+	hash := ioHash(payload)
+	backend := &fakeBackup{payloads: map[string][]byte{hash: payload}}
+	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, cache.New(1024, 1024), backend)
+	backupedAt := time.Unix(123, 0).UTC()
+	if err := meta.PutPayload(metadata.Payload{
+		Hash:         hash,
+		Status:       metadata.StatusBackup,
+		BackupStatus: metadata.Backuped,
+		BackupedAt:   &backupedAt,
+	}); err != nil {
+		t.Fatalf("PutPayload returned error: %v", err)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !bytes.Equal(response.Body.Bytes(), payload) {
+		t.Fatalf("GET body = %q, want %q", response.Body.String(), string(payload))
+	}
+	stored, info, err := store.Exists(hash)
+	if err != nil {
+		t.Fatalf("store Exists returned error: %v", err)
+	}
+	if !stored || info.Size != int64(len(payload)) {
+		t.Fatalf("stored=%t info=%#v, want local payload", stored, info)
+	}
+	record, err := meta.GetPayload(hash)
+	if err != nil {
+		t.Fatalf("GetPayload returned error: %v", err)
+	}
+	if !record.Status.HasLocal() || !record.Status.HasBackup() {
+		t.Fatalf("metadata status = %v, want local and backup", record.Status)
+	}
+	if record.Size != int64(len(payload)) {
+		t.Fatalf("metadata size = %d, want %d", record.Size, len(payload))
+	}
+}
+
 func TestGetFillsCacheAndMarksMetadataCacheBit(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 	meta := openMetadata(t)
@@ -581,6 +626,14 @@ func (f *fakeBackup) Name() string {
 func (f *fakeBackup) Exists(_ context.Context, hash string) (bool, error) {
 	_, ok := f.payloads[hash]
 	return ok, nil
+}
+
+func (f *fakeBackup) Open(_ context.Context, hash string) (io.ReadCloser, error) {
+	payload, ok := f.payloads[hash]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
 func (f *fakeBackup) Enqueue(_ context.Context, hash string) error {

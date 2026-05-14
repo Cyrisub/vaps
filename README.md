@@ -67,7 +67,7 @@ Backup support is optional. Enable the SVN backend with `backup.backend` and `ba
 ./bin/vaps -config vaps.json -backup-backend svn -backup-svn-url https://svn.example.com/repo/vaps-backup
 ```
 
-The SVN backend stores payloads under the configured backup root using only the hash shard path: `<hash[0:2]>/<hash[2:4]>/<hash>.upayload`. It uses `svn list`/`svn info` for remote inspection and `svnmucc` for commits. Payload uploads are queued as `pending` and flushed in batches when `backup.flush_interval` elapses or `backup.max_pending` is reached, reducing small SVN commits. Set `backup.svn.bin` and `backup.svn.mucc_bin`, or use command-line overrides, to choose different binary names when needed.
+The SVN backend stores payloads under the configured backup root using a three-level hash shard path: `<hash[0:2]>/<hash[2:4]>/<hash[4:6]>/<hash[6:]>.upayload`. On startup, VAPS starts a background refresh of the in-memory backup metadata set; for SVN this is a recursive `svn list` of the configured backup root. Listed backup payloads are merged into the main metadata database as backup-only records when no local record exists. A later `GET /v1/payload` for a backup-only payload downloads it from the backend, writes it into local blobs, and updates the metadata with the local size. Payload uploads are queued as `pending` and flushed in batches when `backup.flush_interval` elapses or `backup.max_pending` is reached, reducing small SVN commits. Set `backup.svn.bin` and `backup.svn.mucc_bin`, or use command-line overrides, to choose different binary names when needed.
 
 ## HTTP API
 
