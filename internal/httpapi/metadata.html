@@ -235,6 +235,7 @@
               <th>Backup</th>
               <th>Backuped</th>
               <th>Created</th>
+              <th>VCS</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -311,10 +312,11 @@
           <td>${escapeText(item.backup)}</td>
           <td>${escapeText(formatDateTime(item.backuped_at))}</td>
           <td>${escapeText(formatDateTime(item.created_at))}</td>
+          <td>${escapeText(String(item.vcs_count || 0))}</td>
         </tr>
       `).join("");
       if (items.length === 0) {
-        rows.innerHTML = '<tr><td colspan="6" class="hint">No metadata records matched the query.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="7" class="hint">No metadata records matched the query.</td></tr>';
       }
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;

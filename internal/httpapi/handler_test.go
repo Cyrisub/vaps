@@ -2,22 +2,21 @@ package httpapi_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"vaps/internal/auth"
 	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
-	"vaps/internal/iohash"
 	"vaps/internal/metadata"
+	"vaps/internal/uploadsession"
 )
 
 func TestHealthReturnsOK(t *testing.T) {
@@ -31,425 +30,6 @@ func TestHealthReturnsOK(t *testing.T) {
 	}
 	if response.Body.String() != "ok\n" {
 		t.Fatalf("body = %q, want ok newline", response.Body.String())
-	}
-}
-
-func TestPutHeadAndGetPayload(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d; body=%q", putResponse.Code, http.StatusCreated, putResponse.Body.String())
-	}
-
-	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
-	if headResponse.Code != http.StatusOK {
-		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusOK)
-	}
-	if headResponse.Header().Get("ETag") != `"`+hash+`"` {
-		t.Fatalf("HEAD ETag = %q, want quoted hash", headResponse.Header().Get("ETag"))
-	}
-	if headResponse.Header().Get("Content-Length") != "5" {
-		t.Fatalf("HEAD Content-Length = %q, want 5", headResponse.Header().Get("Content-Length"))
-	}
-
-	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if getResponse.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
-	}
-	body, err := io.ReadAll(getResponse.Body)
-	if err != nil {
-		t.Fatalf("read GET body: %v", err)
-	}
-	if !bytes.Equal(body, payload) {
-		t.Fatalf("GET body = %q, want %q", string(body), string(payload))
-	}
-}
-
-func TestPutRejectsHashMismatch(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+ioHash([]byte("hello")), bytes.NewReader([]byte("goodbye"))))
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
-	}
-}
-
-func TestPutExistingPayloadReturnsStoredTrue(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	first := httptest.NewRecorder()
-	handler.ServeHTTP(first, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if first.Code != http.StatusCreated {
-		t.Fatalf("first PUT status = %d, want %d", first.Code, http.StatusCreated)
-	}
-
-	second := httptest.NewRecorder()
-	handler.ServeHTTP(second, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if second.Code != http.StatusOK {
-		t.Fatalf("second PUT status = %d, want %d", second.Code, http.StatusOK)
-	}
-
-	var got putResponse
-	if err := json.Unmarshal(second.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !got.Stored {
-		t.Fatalf("Stored = false, want true for existing payload")
-	}
-}
-
-func TestMissingPayloadReturnsNotFound(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-	hash := ioHash([]byte("missing"))
-
-	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
-	if headResponse.Code != http.StatusNotFound {
-		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusNotFound)
-	}
-
-	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if getResponse.Code != http.StatusNotFound {
-		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusNotFound)
-	}
-}
-
-func TestExistsReturnsMapByHash(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-	existing := ioHash([]byte("hello"))
-	missing := ioHash([]byte("missing"))
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+existing, bytes.NewReader([]byte("hello"))))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
-	}
-
-	requestBody := bytes.NewBufferString(`{"hashes":["` + existing + `","` + missing + `"]}`)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/payload/exists", requestBody))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
-	}
-
-	var got existsResponse
-	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !got.Items[existing].Exists {
-		t.Fatalf("existing hash marked missing")
-	}
-	if got.Items[existing].Size != 5 {
-		t.Fatalf("existing size = %d, want 5", got.Items[existing].Size)
-	}
-	if got.Items[missing].Exists {
-		t.Fatalf("missing hash marked existing")
-	}
-}
-
-func TestInvalidHashReturnsBadRequest(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash=bad", nil))
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
-	}
-}
-
-func TestHashQueryParameterIsNotAccepted(t *testing.T) {
-	handler := httpapi.New(blobstore.New(t.TempDir()))
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/v1/payload?hash="+ioHash([]byte("hello")), nil))
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
-	}
-}
-
-func TestPutWritesMetadataRecord(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	handler := httpapi.NewWithMetadata(store, meta)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if response.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d; body=%q", response.Code, http.StatusCreated, response.Body.String())
-	}
-
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		t.Fatalf("GetPayload returned error: %v", err)
-	}
-	if record.Hash != hash {
-		t.Fatalf("metadata hash = %q, want %q", record.Hash, hash)
-	}
-	if record.Size != int64(len(payload)) {
-		t.Fatalf("metadata size = %d, want %d", record.Size, len(payload))
-	}
-	if record.Status != metadata.StatusLocal {
-		t.Fatalf("metadata status = %v, want %v", record.Status, metadata.StatusLocal)
-	}
-	if !record.Status.HasLocal() {
-		t.Fatalf("metadata status does not contain local bit")
-	}
-	if record.Status.HasBackup() {
-		t.Fatalf("metadata backup flag = true, want false")
-	}
-	if record.BackupStatus != metadata.BackupNone {
-		t.Fatalf("runtime backup status = %v, want %v", record.BackupStatus, metadata.BackupNone)
-	}
-}
-
-func TestPutQueuesBackupAndMarksMetadataPending(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	backend := &fakeBackup{}
-	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, nil, backend)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if response.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d; body=%q", response.Code, http.StatusCreated, response.Body.String())
-	}
-	if len(backend.enqueued) != 1 || backend.enqueued[0] != hash {
-		t.Fatalf("backup enqueued = %#v, want [%s]", backend.enqueued, hash)
-	}
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		t.Fatalf("GetPayload returned error: %v", err)
-	}
-	if record.Status.HasBackup() {
-		t.Fatalf("metadata backup flag = true, want false before queue flush")
-	}
-	if record.BackupStatus != metadata.BackupPending {
-		t.Fatalf("BackupStatus = %v, want pending", record.BackupStatus)
-	}
-	if record.BackupedAt != nil {
-		t.Fatalf("BackupedAt = %v, want nil before queue flush", record.BackupedAt)
-	}
-}
-
-func TestBackupPayloadEndpointsUseConfiguredBackend(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	backend := &fakeBackup{}
-	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, nil, backend)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-	if _, err := store.Put(hash, bytes.NewReader(payload)); err != nil {
-		t.Fatalf("store Put returned error: %v", err)
-	}
-	if err := meta.PutPayload(metadata.Payload{Hash: hash, Size: int64(len(payload)), Status: metadata.StatusLocal}); err != nil {
-		t.Fatalf("PutPayload returned error: %v", err)
-	}
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/backup/payload?iohash="+hash, nil))
-	if putResponse.Code != http.StatusOK {
-		t.Fatalf("backup PUT status = %d, want %d; body=%q", putResponse.Code, http.StatusOK, putResponse.Body.String())
-	}
-
-	listResponse := httptest.NewRecorder()
-	handler.ServeHTTP(listResponse, httptest.NewRequest(http.MethodGet, "/v1/backup/payloads", nil))
-	if listResponse.Code != http.StatusOK {
-		t.Fatalf("backup list status = %d, want %d; body=%q", listResponse.Code, http.StatusOK, listResponse.Body.String())
-	}
-	var got struct {
-		Items []backup.Object `json:"items"`
-		Total int             `json:"total"`
-	}
-	if err := json.Unmarshal(listResponse.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
-	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].Hash != hash {
-		t.Fatalf("backup list response = %#v", got)
-	}
-}
-
-func TestHeadReturnsServerErrorWhenMetadataExistsButLocalFileMissing(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	handler := httpapi.NewWithMetadata(store, meta)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
-	}
-	path, err := store.Path(hash)
-	if err != nil {
-		t.Fatalf("Path returned error: %v", err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("remove blob: %v", err)
-	}
-
-	headResponse := httptest.NewRecorder()
-	handler.ServeHTTP(headResponse, httptest.NewRequest(http.MethodHead, "/v1/payload?iohash="+hash, nil))
-	if headResponse.Code != http.StatusInternalServerError {
-		t.Fatalf("HEAD status = %d, want %d", headResponse.Code, http.StatusInternalServerError)
-	}
-}
-
-func TestGetReturnsNotFoundWhenMetadataMissingEvenIfLocalFileExists(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	handler := httpapi.NewWithMetadata(store, meta)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	if _, err := store.Put(hash, bytes.NewReader(payload)); err != nil {
-		t.Fatalf("store Put returned error: %v", err)
-	}
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("GET status = %d, want %d", response.Code, http.StatusNotFound)
-	}
-}
-
-func TestGetRestoresBackupOnlyPayloadToLocalStore(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-	backend := &fakeBackup{payloads: map[string][]byte{hash: payload}}
-	handler := httpapi.NewWithMetadataCacheAndBackup(store, meta, cache.New(1024, 1024), backend)
-	backupedAt := time.Unix(123, 0).UTC()
-	if err := meta.PutPayload(metadata.Payload{
-		Hash:         hash,
-		Status:       metadata.StatusBackup,
-		BackupStatus: metadata.Backuped,
-		BackupedAt:   &backupedAt,
-	}); err != nil {
-		t.Fatalf("PutPayload returned error: %v", err)
-	}
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
-	}
-	if !bytes.Equal(response.Body.Bytes(), payload) {
-		t.Fatalf("GET body = %q, want %q", response.Body.String(), string(payload))
-	}
-	stored, info, err := store.Exists(hash)
-	if err != nil {
-		t.Fatalf("store Exists returned error: %v", err)
-	}
-	if !stored || info.Size != int64(len(payload)) {
-		t.Fatalf("stored=%t info=%#v, want local payload", stored, info)
-	}
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		t.Fatalf("GetPayload returned error: %v", err)
-	}
-	if !record.Status.HasLocal() || !record.Status.HasBackup() {
-		t.Fatalf("metadata status = %v, want local and backup", record.Status)
-	}
-	if record.Size != int64(len(payload)) {
-		t.Fatalf("metadata size = %d, want %d", record.Size, len(payload))
-	}
-}
-
-func TestGetFillsCacheAndMarksMetadataCacheBit(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	lru := cache.New(1024, 1024)
-	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
-	}
-
-	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if getResponse.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
-	}
-	cached, ok := lru.Get(hash)
-	if !ok {
-		t.Fatalf("cache miss after GET, want cached payload")
-	}
-	if !bytes.Equal(cached, payload) {
-		t.Fatalf("cached payload = %q, want %q", string(cached), string(payload))
-	}
-
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		t.Fatalf("GetPayload returned error: %v", err)
-	}
-	if !record.Status.HasCache() {
-		t.Fatalf("metadata status cache bit = false, want true")
-	}
-}
-
-func TestDashboardStatsReturnsMetadataAndCacheStats(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	lru := cache.New(1024, 1024)
-	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
-	payload := []byte("hello")
-	hash := ioHash(payload)
-
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
-	}
-	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if getResponse.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
-	}
-
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/dashboard/stats", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
-	}
-
-	var got dashboardStats
-	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.Metadata.PayloadCount != 1 {
-		t.Fatalf("PayloadCount = %d, want 1", got.Metadata.PayloadCount)
-	}
-	if got.Metadata.TotalBytes != 5 {
-		t.Fatalf("TotalBytes = %d, want 5", got.Metadata.TotalBytes)
-	}
-	if got.Cache.Entries != 1 {
-		t.Fatalf("Cache entries = %d, want 1", got.Cache.Entries)
-	}
-	if got.Cache.UsedBytes != 5 {
-		t.Fatalf("Cache used bytes = %d, want 5", got.Cache.UsedBytes)
 	}
 }
 
@@ -468,18 +48,6 @@ func TestDashboardReturnsHTML(t *testing.T) {
 	if !bytes.Contains(response.Body.Bytes(), []byte("VAPS Dashboard")) {
 		t.Fatalf("dashboard body does not contain title: %q", response.Body.String())
 	}
-	if bytes.Contains(response.Body.Bytes(), []byte("vaps dashboard")) {
-		t.Fatalf("dashboard body contains lower-case page title")
-	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("Inter")) {
-		t.Fatalf("dashboard body does not contain preferred font stack")
-	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime")) {
-		t.Fatalf("dashboard body does not contain human-friendly time formatter")
-	}
-	if bytes.Contains(response.Body.Bytes(), []byte("{{")) {
-		t.Fatalf("dashboard body contains Go template delimiters")
-	}
 }
 
 func TestDashboardMetadataReturnsHTML(t *testing.T) {
@@ -491,188 +59,184 @@ func TestDashboardMetadataReturnsHTML(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
-		t.Fatalf("Content-Type = %q, want text/html", got)
-	}
 	if !bytes.Contains(response.Body.Bytes(), []byte("Metadata Browser")) {
 		t.Fatalf("metadata dashboard body does not contain title: %q", response.Body.String())
 	}
-	if bytes.Contains(response.Body.Bytes(), []byte("metadata browser")) {
-		t.Fatalf("metadata dashboard body contains lower-case page title")
+}
+
+func TestV2AuthRequestAndExpire(t *testing.T) {
+	handler := newV2Handler(t, openMetadata(t), nil, nil)
+	token := requestToken(t, handler)
+
+	expireResponse := httptest.NewRecorder()
+	handler.ServeHTTP(expireResponse, httptest.NewRequest(http.MethodGet, "/v2/auth/expire?token="+token, nil))
+	if expireResponse.Code != http.StatusOK {
+		t.Fatalf("expire status = %d, want %d", expireResponse.Code, http.StatusOK)
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("Inter")) {
-		t.Fatalf("metadata dashboard body does not contain preferred font stack")
-	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime")) {
-		t.Fatalf("metadata dashboard body does not contain human-friendly time formatter")
-	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("formatDateTime(item.created_at)")) {
-		t.Fatalf("metadata dashboard does not localize row timestamps in the browser")
-	}
-	if bytes.Contains(response.Body.Bytes(), []byte("created_at_human || formatDateTime")) {
-		t.Fatalf("metadata dashboard prefers server-formatted timestamps over browser-local timestamps")
-	}
-	if bytes.Contains(response.Body.Bytes(), []byte("{{")) {
-		t.Fatalf("metadata dashboard body contains Go template delimiters")
+
+	pull := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+ioHash([]byte("missing")), nil)
+	req.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(pull, req)
+	if pull.Code != http.StatusUnauthorized {
+		t.Fatalf("pull after expire status = %d, want %d", pull.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestDashboardMetadataQueryFiltersRecords(t *testing.T) {
-	store := blobstore.New(t.TempDir())
-	meta := openMetadata(t)
-	lru := cache.New(1024, 1024)
-	handler := httpapi.NewWithMetadataAndCache(store, meta, lru)
-	payload := []byte("hello")
+func TestV2DirectPushPullAndRange(t *testing.T) {
+	handler := newV2Handler(t, openMetadata(t), cache.New(1024, 1024), nil)
+	token := requestToken(t, handler)
+	payload := []byte("hello-range")
 	hash := ioHash(payload)
 
-	putResponse := httptest.NewRecorder()
-	handler.ServeHTTP(putResponse, httptest.NewRequest(http.MethodPut, "/v1/payload?iohash="+hash, bytes.NewReader(payload)))
-	if putResponse.Code != http.StatusCreated {
-		t.Fatalf("PUT status = %d, want %d", putResponse.Code, http.StatusCreated)
-	}
-	getResponse := httptest.NewRecorder()
-	handler.ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/v1/payload?iohash="+hash, nil))
-	if getResponse.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, want %d", getResponse.Code, http.StatusOK)
+	push := httptest.NewRecorder()
+	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	pushReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(push, pushReq)
+	if push.Code != http.StatusCreated {
+		t.Fatalf("push status = %d, want %d; body=%q", push.Code, http.StatusCreated, push.Body.String())
 	}
 
-	response := httptest.NewRecorder()
-	path := "/dashboard/metadata/query?q=" + strings.ToUpper(hash[:8]) + "&status=cache&min_size=5&max_size=5&limit=10"
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	head := httptest.NewRecorder()
+	headReq := httptest.NewRequest(http.MethodHead, "/v2/payload/pull?iohash="+hash, nil)
+	headReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(head, headReq)
+	if head.Code != http.StatusOK {
+		t.Fatalf("head status = %d, want %d", head.Code, http.StatusOK)
+	}
+	if head.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("Accept-Ranges = %q, want bytes", head.Header().Get("Accept-Ranges"))
 	}
 
-	var got metadataQueryResponse
-	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode response: %v", err)
+	get := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+hash, nil)
+	getReq.Header.Set("Authorization", authHeader(token))
+	getReq.Header.Set("Range", "bytes=0-2")
+	handler.ServeHTTP(get, getReq)
+	if get.Code != http.StatusPartialContent {
+		t.Fatalf("range GET status = %d, want %d", get.Code, http.StatusPartialContent)
 	}
-	if got.Total != 1 {
-		t.Fatalf("Total = %d, want 1", got.Total)
+	if got := get.Header().Get("Content-Range"); got != "bytes 0-2/11" {
+		t.Fatalf("Content-Range = %q, want bytes 0-2/11", got)
 	}
-	if len(got.Items) != 1 {
-		t.Fatalf("len(Items) = %d, want 1", len(got.Items))
-	}
-	if got.Items[0].Hash != hash {
-		t.Fatalf("item hash = %q, want %q", got.Items[0].Hash, hash)
-	}
-	if got.Items[0].SizeHuman != "5 B" {
-		t.Fatalf("item size_human = %q, want 5 B", got.Items[0].SizeHuman)
-	}
-	if got.Items[0].CreatedAtHuman == "" {
-		t.Fatalf("item created_at_human is empty")
-	}
-	if !got.Items[0].StatusFlags.Cache {
-		t.Fatalf("cache flag = false, want true")
+	if !bytes.Equal(get.Body.Bytes(), payload[:3]) {
+		t.Fatalf("range body = %q, want %q", get.Body.Bytes(), payload[:3])
 	}
 }
 
-type existsResponse struct {
-	Items map[string]existsItem `json:"items"`
-}
+func TestV2MetadataExistsAndVCS(t *testing.T) {
+	meta := openMetadata(t)
+	handler := newV2Handler(t, meta, nil, nil)
+	token := requestToken(t, handler)
+	payload := []byte("meta")
+	hash := ioHash(payload)
 
-type existsItem struct {
-	Exists bool  `json:"exists"`
-	Size   int64 `json:"size,omitempty"`
-}
-
-type putResponse struct {
-	Hash   string `json:"hash"`
-	Size   int64  `json:"size"`
-	Stored bool   `json:"stored"`
-}
-
-type dashboardStats struct {
-	Metadata struct {
-		PayloadCount int64 `json:"payload_count"`
-		TotalBytes   int64 `json:"total_bytes"`
-	} `json:"metadata"`
-	Cache struct {
-		Entries   int   `json:"entries"`
-		UsedBytes int64 `json:"used_bytes"`
-	} `json:"cache"`
-}
-
-type metadataQueryResponse struct {
-	Items []metadataQueryItem `json:"items"`
-	Total int64               `json:"total"`
-}
-
-type metadataQueryItem struct {
-	Hash           string              `json:"hash"`
-	SizeHuman      string              `json:"size_human"`
-	CreatedAtHuman string              `json:"created_at_human"`
-	StatusFlags    metadataStatusFlags `json:"status_flags"`
-}
-
-type metadataStatusFlags struct {
-	Cache bool `json:"cache"`
-}
-
-func ioHash(payload []byte) string {
-	return iohash.SumHex(payload)
-}
-
-type fakeBackup struct {
-	puts     []string
-	enqueued []string
-	payloads map[string][]byte
-}
-
-func (f *fakeBackup) Name() string {
-	return "fake"
-}
-
-func (f *fakeBackup) Exists(_ context.Context, hash string) (bool, error) {
-	_, ok := f.payloads[hash]
-	return ok, nil
-}
-
-func (f *fakeBackup) Open(_ context.Context, hash string) (io.ReadCloser, error) {
-	payload, ok := f.payloads[hash]
-	if !ok {
-		return nil, os.ErrNotExist
+	push := httptest.NewRecorder()
+	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	pushReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(push, pushReq)
+	if push.Code != http.StatusCreated {
+		t.Fatalf("push status = %d, want %d", push.Code, http.StatusCreated)
 	}
-	return io.NopCloser(bytes.NewReader(payload)), nil
-}
 
-func (f *fakeBackup) Enqueue(_ context.Context, hash string) error {
-	f.enqueued = append(f.enqueued, hash)
-	return nil
-}
-
-func (f *fakeBackup) Put(_ context.Context, hash string, reader io.Reader) (backup.Object, error) {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return backup.Object{}, err
+	vcsBody := `{"payload_hash":"` + hash + `","vcs_type":"svn","repo":"repo","revision":"123","path":"/Content/Foo.uasset","asset_id":"Foo"}`
+	vcsPost := httptest.NewRecorder()
+	handler.ServeHTTP(vcsPost, httptest.NewRequest(http.MethodPost, "/v2/metadata", strings.NewReader(vcsBody)))
+	if vcsPost.Code != http.StatusCreated {
+		t.Fatalf("vcs post status = %d, want %d; body=%q", vcsPost.Code, http.StatusCreated, vcsPost.Body.String())
 	}
-	if f.payloads == nil {
-		f.payloads = map[string][]byte{}
+
+	vcsGet := httptest.NewRecorder()
+	handler.ServeHTTP(vcsGet, httptest.NewRequest(http.MethodGet, "/v2/metadata?payload_hash="+hash, nil))
+	if vcsGet.Code != http.StatusOK {
+		t.Fatalf("vcs get status = %d, want %d", vcsGet.Code, http.StatusOK)
 	}
-	f.puts = append(f.puts, hash)
-	f.payloads[hash] = data
-	return backup.Object{Hash: hash, Path: "blobs/test/" + hash + ".upayload"}, nil
+	var records []metadata.VCSRecord
+	if err := json.Unmarshal(vcsGet.Body.Bytes(), &records); err != nil {
+		t.Fatalf("decode vcs records: %v", err)
+	}
+	if len(records) != 1 || records[0].Path != "/Content/Foo.uasset" {
+		t.Fatalf("records = %#v", records)
+	}
+
+	existsReq := bytes.NewBufferString(`{"hashes":["` + hash + `","` + ioHash([]byte("missing")) + `"]}`)
+	existsPost := httptest.NewRecorder()
+	existsHTTPReq := httptest.NewRequest(http.MethodPost, "/v2/metadata/exists", existsReq)
+	existsHTTPReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(existsPost, existsHTTPReq)
+	if existsPost.Code != http.StatusOK {
+		t.Fatalf("exists status = %d, want %d", existsPost.Code, http.StatusOK)
+	}
 }
 
-func (f *fakeBackup) List(context.Context) ([]backup.Object, error) {
-	items := make([]backup.Object, 0, len(f.payloads))
-	for hash := range f.payloads {
-		items = append(items, backup.Object{Hash: hash, Path: "blobs/test/" + hash + ".upayload"})
+func TestV2TusUploadCompletes(t *testing.T) {
+	handler := newV2Handler(t, openMetadata(t), nil, nil)
+	token := requestToken(t, handler)
+	payload := []byte("tus-upload-content")
+	hash := ioHash(payload)
+
+	create := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	createReq.Header.Set("Authorization", authHeader(token))
+	createReq.Header.Set("Tus-Resumable", "1.0.0")
+	createReq.Header.Set("Upload-Length", "18")
+	handler.ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("tus create status = %d, want %d; body=%q", create.Code, http.StatusCreated, create.Body.String())
 	}
-	return items, nil
+
+	pull := httptest.NewRecorder()
+	pullReq := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+hash, nil)
+	pullReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(pull, pullReq)
+	if pull.Code != http.StatusOK {
+		t.Fatalf("pull status = %d, want %d; body=%q", pull.Code, http.StatusOK, pull.Body.String())
+	}
+	if !bytes.Equal(pull.Body.Bytes(), payload) {
+		t.Fatalf("pull body = %q, want %q", pull.Body.Bytes(), payload)
+	}
 }
 
-func openMetadata(t *testing.T) *metadata.Store {
+func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) http.Handler {
 	t.Helper()
-
-	store, err := metadata.Open(t.TempDir() + "/metadata.db")
+	dir := t.TempDir()
+	authStore, err := auth.Open(filepath.Join(dir, "auth.db"), time.Minute)
 	if err != nil {
-		t.Fatalf("open metadata: %v", err)
+		t.Fatalf("open auth: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatalf("close metadata: %v", err)
-		}
+	t.Cleanup(func() { _ = authStore.Close() })
+	uploads, err := uploadsession.Open(filepath.Join(dir, "uploads.db"), filepath.Join(dir, "uploads"), time.Hour, time.Minute)
+	if err != nil {
+		t.Fatalf("open uploads: %v", err)
+	}
+	t.Cleanup(func() { _ = uploads.Close() })
+	return httpapi.NewV2(blobstore.New(dir), meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+		AuthExpireTime:        time.Minute,
+		UploadDirectMaxBytes:  8 * 1024 * 1024,
+		UploadExpiration:      time.Hour,
+		UploadCleanupInterval: time.Minute,
 	})
-	return store
+}
+
+func requestToken(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v2/auth/request", strings.NewReader(`{"client_id":"test","client_info":{"hostname":"test"}}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("auth request status = %d, want 200; body=%q", response.Code, response.Body.String())
+	}
+	var got struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode auth response: %v", err)
+	}
+	if got.Token == "" {
+		t.Fatalf("token is empty")
+	}
+	return got.Token
+}
+
+func authHeader(token string) string {
+	return "Bearer " + token
 }

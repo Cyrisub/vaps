@@ -19,11 +19,25 @@ type Config struct {
 	Addr              string       `json:"addr"`
 	DataDir           string       `json:"data_dir"`
 	MetadataDB        string       `json:"metadata_db"`
+	AuthDB            string       `json:"auth_db"`
+	UploadDB          string       `json:"upload_db"`
 	LogDir            string       `json:"log_dir"`
 	LogRetentionDays  int          `json:"log_retention_days"`
 	StatusLogInterval Duration     `json:"status_log_interval"`
 	Cache             CacheConfig  `json:"cache"`
+	Auth              AuthConfig   `json:"auth"`
+	Upload            UploadConfig `json:"upload"`
 	Backup            BackupConfig `json:"backup"`
+}
+
+type AuthConfig struct {
+	ExpireTime Duration `json:"expire_time"`
+}
+
+type UploadConfig struct {
+	DirectMaxBytes  int64    `json:"direct_max_bytes"`
+	Expiration      Duration `json:"expiration"`
+	CleanupInterval Duration `json:"cleanup_interval"`
 }
 
 type CacheConfig struct {
@@ -78,12 +92,20 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	if cfg.MetadataDB == "" {
 		cfg.MetadataDB = filepath.Join(cfg.DataDir, "metadata.db")
 	}
+	if cfg.AuthDB == "" {
+		cfg.AuthDB = filepath.Join(cfg.DataDir, "auth.db")
+	}
+	if cfg.UploadDB == "" {
+		cfg.UploadDB = filepath.Join(cfg.DataDir, "uploads.db")
+	}
 	if err := validate(cfg); err != nil {
 		return Config{}, err
 	}
 	cfg.DataDir = resolvePath(baseDir, cfg.DataDir)
 	cfg.LogDir = resolvePath(baseDir, cfg.LogDir)
 	cfg.MetadataDB = resolvePath(baseDir, cfg.MetadataDB)
+	cfg.AuthDB = resolvePath(baseDir, cfg.AuthDB)
+	cfg.UploadDB = resolvePath(baseDir, cfg.UploadDB)
 	return cfg, nil
 }
 
@@ -127,6 +149,14 @@ func defaultConfig() Config {
 		Cache: CacheConfig{
 			Bytes:          64 * 1024 * 1024,
 			MaxObjectBytes: 4 * 1024 * 1024,
+		},
+		Auth: AuthConfig{
+			ExpireTime: Duration(30 * time.Minute),
+		},
+		Upload: UploadConfig{
+			DirectMaxBytes:  8 * 1024 * 1024,
+			Expiration:      Duration(24 * time.Hour),
+			CleanupInterval: Duration(time.Minute),
 		},
 		Backup: BackupConfig{
 			FlushInterval: Duration(time.Minute),
@@ -296,6 +326,18 @@ func normalize(cfg *Config) {
 }
 
 func validate(cfg Config) error {
+	if time.Duration(cfg.Auth.ExpireTime) <= 0 {
+		return errors.New("auth-expire-time must be positive")
+	}
+	if cfg.Upload.DirectMaxBytes <= 0 {
+		return errors.New("upload-direct-max-bytes must be positive")
+	}
+	if time.Duration(cfg.Upload.Expiration) <= 0 {
+		return errors.New("upload-expiration must be positive")
+	}
+	if time.Duration(cfg.Upload.CleanupInterval) <= 0 {
+		return errors.New("upload-cleanup-interval must be positive")
+	}
 	if time.Duration(cfg.Backup.FlushInterval) < 0 {
 		return errors.New("backup-flush-interval must not be negative")
 	}

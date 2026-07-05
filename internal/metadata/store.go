@@ -214,7 +214,10 @@ func (s *Store) QueryPayloads(query PayloadQuery) (PayloadQueryResult, error) {
 
 func (s *Store) init() error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(payloadBucket))
+		if _, err := tx.CreateBucketIfNotExists([]byte(payloadBucket)); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists([]byte(vcsBucket))
 		return err
 	})
 }

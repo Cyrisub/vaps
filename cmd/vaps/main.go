@@ -10,17 +10,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"vaps/internal/appconfig"
+	"vaps/internal/auth"
 	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
 	"vaps/internal/logfile"
 	"vaps/internal/metadata"
+	"vaps/internal/uploadsession"
 )
 
 func main() {
@@ -65,7 +68,26 @@ func run() int {
 		log.Print(err)
 		return 1
 	}
-	handler := httpapi.AccessLog(httpapi.NewWithMetadataCacheAndBackup(store, meta, lru, backupBackend))
+	authStore, err := auth.Open(cfg.AuthDB, time.Duration(cfg.Auth.ExpireTime))
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	defer authStore.Close()
+	uploadsDir := filepath.Join(cfg.DataDir, "uploads")
+	uploads, err := uploadsession.Open(cfg.UploadDB, uploadsDir, time.Duration(cfg.Upload.Expiration), time.Duration(cfg.Upload.CleanupInterval))
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	defer uploads.Close()
+	startUploadCleanup(ctx, uploads, time.Duration(cfg.Upload.CleanupInterval))
+	handler := httpapi.AccessLog(httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+		AuthExpireTime:        time.Duration(cfg.Auth.ExpireTime),
+		UploadDirectMaxBytes:  cfg.Upload.DirectMaxBytes,
+		UploadExpiration:      time.Duration(cfg.Upload.Expiration),
+		UploadCleanupInterval: time.Duration(cfg.Upload.CleanupInterval),
+	}))
 	startStatusLogger(ctx, time.Duration(cfg.StatusLogInterval), meta, lru)
 
 	server := &http.Server{
@@ -261,6 +283,26 @@ func listenURL(addr string) string {
 		host = "localhost"
 	}
 	return "http://" + net.JoinHostPort(host, port)
+}
+
+func startUploadCleanup(ctx context.Context, uploads *uploadsession.Store, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := uploads.CleanupExpired(); err != nil {
+					log.Printf("upload cleanup failed error=%q", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func startStatusLogger(ctx context.Context, interval time.Duration, meta *metadata.Store, lru *cache.Cache) {

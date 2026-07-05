@@ -13,17 +13,22 @@ import (
 	"strings"
 	"time"
 
+	"vaps/internal/auth"
 	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/metadata"
+	"vaps/internal/uploadsession"
 )
 
 type Handler struct {
-	store  *blobstore.Store
-	meta   *metadata.Store
-	cache  *cache.Cache
-	backup backup.Backend
+	store   *blobstore.Store
+	meta    *metadata.Store
+	cache   *cache.Cache
+	backup  backup.Backend
+	auth    *auth.Store
+	uploads *uploadsession.Store
+	opts    Options
 }
 
 type existsRequest struct {
@@ -69,6 +74,7 @@ type metadataQueryItem struct {
 	Status          metadata.PayloadStatus `json:"status"`
 	StatusFlags     metadataStatusFlags    `json:"status_flags"`
 	Backup          string                 `json:"backup"`
+	VCSCount        int                    `json:"vcs_count"`
 	CreatedAt       *time.Time             `json:"created_at"`
 	CreatedAtHuman  string                 `json:"created_at_human"`
 	BackupedAt      *time.Time             `json:"backuped_at"`
@@ -90,23 +96,47 @@ var dashboardHTML string
 var metadataDashboardHTML string
 
 func New(store *blobstore.Store) http.Handler {
-	return &Handler{store: store}
+	return &Handler{store: store, opts: defaultOptions()}
 }
 
 func NewWithMetadata(store *blobstore.Store, meta *metadata.Store) http.Handler {
-	return &Handler{store: store, meta: meta}
+	return &Handler{store: store, meta: meta, opts: defaultOptions()}
 }
 
 func NewWithCache(store *blobstore.Store, lru *cache.Cache) http.Handler {
-	return &Handler{store: store, cache: lru}
+	return &Handler{store: store, cache: lru, opts: defaultOptions()}
 }
 
 func NewWithMetadataAndCache(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache) http.Handler {
-	return &Handler{store: store, meta: meta, cache: lru}
+	return &Handler{store: store, meta: meta, cache: lru, opts: defaultOptions()}
 }
 
 func NewWithMetadataCacheAndBackup(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) http.Handler {
-	return &Handler{store: store, meta: meta, cache: lru, backup: backupBackend}
+	return &Handler{store: store, meta: meta, cache: lru, backup: backupBackend, opts: defaultOptions()}
+}
+
+func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend, authStore *auth.Store, uploads *uploadsession.Store, opts Options) http.Handler {
+	if opts.AuthExpireTime <= 0 {
+		opts.AuthExpireTime = defaultOptions().AuthExpireTime
+	}
+	if opts.UploadDirectMaxBytes <= 0 {
+		opts.UploadDirectMaxBytes = defaultOptions().UploadDirectMaxBytes
+	}
+	if opts.UploadExpiration <= 0 {
+		opts.UploadExpiration = defaultOptions().UploadExpiration
+	}
+	if opts.UploadCleanupInterval <= 0 {
+		opts.UploadCleanupInterval = defaultOptions().UploadCleanupInterval
+	}
+	return &Handler{
+		store:   store,
+		meta:    meta,
+		cache:   lru,
+		backup:  backupBackend,
+		auth:    authStore,
+		uploads: uploads,
+		opts:    opts,
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -121,19 +151,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.metadataDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/query":
 		h.metadataQuery(w, r)
-	case r.URL.Path == "/v1/payload" && r.Method == http.MethodHead:
-		h.headPayload(w, r)
-	case r.URL.Path == "/v1/payload" && r.Method == http.MethodGet:
-		h.getPayload(w, r)
-	case r.URL.Path == "/v1/payload" && r.Method == http.MethodPut:
-		h.putPayload(w, r)
-	case r.URL.Path == "/v1/payload/exists" && r.Method == http.MethodPost:
-		h.exists(w, r)
-	case r.URL.Path == "/v1/backup/payloads" && r.Method == http.MethodGet:
-		h.listBackupPayloads(w, r)
-	case r.URL.Path == "/v1/backup/payload" && r.Method == http.MethodPut:
-		h.putBackupPayload(w, r)
+	case r.URL.Path == "/v2/auth/request" && r.Method == http.MethodPost:
+		h.authRequest(w, r)
+	case r.URL.Path == "/v2/auth/expire" && r.Method == http.MethodGet:
+		h.authExpire(w, r)
+	case r.URL.Path == "/v2/payload/pull":
+		h.pullPayload(w, r)
+	case r.URL.Path == "/v2/payload/push":
+		h.pushPayload(w, r)
+	case r.URL.Path == "/v2/metadata/exists" && r.Method == http.MethodPost:
+		h.metadataExistsV2(w, r)
+	case r.URL.Path == "/v2/metadata" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
+		h.metadataV2(w, r)
 	default:
+		if h.serveLegacyV1(w, r) {
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -225,7 +258,7 @@ func (h *Handler) metadataQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]metadataQueryItem, 0, len(result.Items))
 	for _, payload := range result.Items {
-		items = append(items, newMetadataQueryItem(payload))
+		items = append(items, h.enrichMetadataQueryItem(newMetadataQueryItem(payload)))
 	}
 	writeJSON(w, http.StatusOK, metadataQueryResponse{
 		Items:  items,
@@ -349,7 +382,7 @@ func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
 	if backup == metadata.BackupNone && payload.Status.HasBackup() {
 		backup = metadata.Backuped
 	}
-	return metadataQueryItem{
+	item := metadataQueryItem{
 		Hash:      payload.Hash,
 		Size:      payload.Size,
 		SizeHuman: formatHumanBytes(payload.Size),
@@ -365,6 +398,19 @@ func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
 		BackupedAt:      payload.BackupedAt,
 		BackupedAtHuman: formatHumanTime(payload.BackupedAt),
 	}
+	return item
+}
+
+func (h *Handler) enrichMetadataQueryItem(item metadataQueryItem) metadataQueryItem {
+	if h.meta == nil {
+		return item
+	}
+	count, err := h.meta.CountVCSByPayloadHash(item.Hash)
+	if err != nil {
+		return item
+	}
+	item.VCSCount = count
+	return item
 }
 
 func formatHumanBytes(value int64) string {
@@ -506,12 +552,25 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.meta != nil {
 		now := time.Now().UTC()
-		if err := h.meta.PutPayload(metadata.Payload{
-			Hash:      info.Hash,
-			Size:      info.Size,
-			Status:    metadata.StatusLocal,
-			CreatedAt: &now,
-		}); err != nil {
+		record, err := h.meta.GetPayload(info.Hash)
+		if errors.Is(err, metadata.ErrNotFound) {
+			record = metadata.Payload{
+				Hash:      info.Hash,
+				Size:      info.Size,
+				Status:    metadata.StatusLocal,
+				CreatedAt: &now,
+			}
+		} else if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else {
+			record.Size = info.Size
+			record.Status |= metadata.StatusLocal
+			if record.CreatedAt == nil {
+				record.CreatedAt = &now
+			}
+		}
+		if err := h.meta.PutPayload(record); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

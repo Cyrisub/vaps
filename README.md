@@ -9,9 +9,10 @@ make fmt
 make vet
 make test
 make build
+make build-legacy-v1
 ```
 
-The binary is written to `bin/vaps`.
+The default binary is written to `bin/vaps`. The legacy build enables v1 and backup HTTP endpoints via the `vaps_legacy_v1` build tag and is written to `bin/vaps-legacy`.
 
 Run the server with defaults:
 
@@ -38,6 +39,14 @@ Example `vaps.json`:
   "cache": {
     "bytes": 67108864,
     "max_object_bytes": 4194304
+  },
+  "auth": {
+    "expire_time": "30m"
+  },
+  "upload": {
+    "direct_max_bytes": 8388608,
+    "expiration": "24h",
+    "cleanup_interval": "1m"
   },
   "backup": {
     "backend": "svn",
@@ -71,53 +80,106 @@ The SVN backend stores payloads under the configured backup root using a three-l
 
 ## HTTP API
 
-Payload APIs identify objects with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the payload bytes: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
+By default, the server exposes v2 endpoints. Legacy v1 payload and backup endpoints are available only in builds compiled with `-tags vaps_legacy_v1`.
 
-- `GET /health`
+Payload objects are identified with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the payload bytes: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
 
-  Returns `200 OK` with `ok` as plain text.
+### Auth
 
-- `PUT /v1/payload?iohash=<iohash>`
+- `POST /v2/auth/request`
 
-  Stores the request body as a payload. The body hash must match `iohash`.
-
-  Returns `201 Created` for a new payload or `200 OK` when the payload already exists:
-
-  ```json
-  {"hash":"<iohash>","size":123,"stored":true}
-  ```
-
-- `HEAD /v1/payload?iohash=<iohash>`
-
-  Checks whether a payload exists without returning the body. Existing payloads return `200 OK` with `ETag`, `Content-Length`, and `Content-Type: application/octet-stream` headers. Missing payloads return `404 Not Found`.
-
-- `GET /v1/payload?iohash=<iohash>`
-
-  Returns the raw payload bytes with `Content-Type: application/octet-stream`. Existing payloads return `200 OK`; missing payloads return `404 Not Found`.
-
-- `POST /v1/payload/exists`
-
-  Checks multiple payload hashes at once.
+  Request a bearer token. No auth required.
 
   Request:
 
   ```json
-  {"hashes":["<iohash>","<iohash>"]}
+  {"client_id":"studio-1","client_info":{"hostname":"dev-box","version":"1.0"}}
   ```
 
   Response:
 
   ```json
-  {"items":{"<iohash>":{"exists":true,"size":123},"<iohash>":{"exists":false}}}
+  {"token":"<token>","expires_at":"2026-07-04T15:16:00Z"}
   ```
 
+  `expires_at` uses a sliding idle window configured by `auth.expire_time`. Successful `/v2/payload/pull` and `/v2/payload/push` requests refresh the expiry time.
+
+- `GET /v2/auth/expire?token=<token>`
+
+  Immediately revoke a token. No auth header required.
+
+### Pull
+
+Requires `Authorization: Bearer <token>`.
+
+- `HEAD /v2/payload/pull?iohash=<iohash>`
+
+  Returns `ETag`, `Content-Length`, and `Accept-Ranges: bytes`.
+
+- `GET /v2/payload/pull?iohash=<iohash>`
+
+  Returns payload bytes. Supports standard single-range requests and responds with `206 Partial Content` when appropriate.
+
+### Push
+
+Requires `Authorization: Bearer <token>`.
+
+The same URL supports direct upload for small payloads and tus uploads for large/resumable payloads.
+
+- `OPTIONS /v2/payload/push`
+
+  Returns tus capabilities and `Upload-Direct-Max-Bytes`.
+
+- `POST /v2/payload/push?iohash=<iohash>` direct upload
+
+  Upload the request body when no tus headers are present. Bodies larger than `upload.direct_max_bytes` return `413 Payload Too Large`.
+
+- `POST /v2/payload/push?iohash=<iohash>` tus create
+
+  Create a tus upload session with `Tus-Resumable: 1.0.0` and `Upload-Length`.
+
+- `HEAD /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+
+  Query the current upload offset.
+
+- `PATCH /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+
+  Append bytes using `Content-Type: application/offset+octet-stream`, `Upload-Offset`, and optional `Upload-Checksum`.
+
+- `DELETE /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+
+  Terminate an incomplete upload session.
+
+Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `expiration`, `termination`, `checksum`.
+
+### Metadata
+
+- `POST /v2/metadata/exists`
+
+  Requires bearer token. Batch payload existence check. Does not refresh token idle expiry.
+
+- `POST /v2/metadata`
+
+  No auth. Report VCS association data from a post-commit hook.
+
+- `GET /v2/metadata?payload_hash=<iohash>`
+
+  Query VCS metadata records for a payload.
+
+### Legacy v1 (build tag only)
+
+When built with `-tags vaps_legacy_v1`, the server also exposes:
+
+- `PUT/GET/HEAD /v1/payload?iohash=<iohash>`
+- `POST /v1/payload/exists`
 - `GET /v1/backup/payloads`
-
-  Lists payload objects currently visible in the configured backup backend.
-
 - `PUT /v1/backup/payload?iohash=<iohash>`
 
-  Uploads an existing local payload to the configured backup backend.
+### Dashboard
+
+- `GET /health`
+
+  Returns `200 OK` with `ok` as plain text.
 
 - `GET /dashboard`
 
