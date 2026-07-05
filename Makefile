@@ -1,7 +1,7 @@
 APP_NAME := vaps
 BUILD_DIR := bin
 
-.PHONY: fmt vet test build clean
+.PHONY: fmt vet test test-functional build clean
 
 fmt:
 	go fmt ./...
@@ -12,14 +12,14 @@ vet:
 test:
 	go test ./...
 
+test-functional:
+	go test ./test/functional/... -count=1
+
 build:
 	go build -o $(BUILD_DIR)/$(APP_NAME) ./cmd/$(APP_NAME)
 
 build-legacy-v1:
 	go build -tags vaps_legacy_v1 -o $(BUILD_DIR)/$(APP_NAME)-legacy ./cmd/$(APP_NAME)
-
-test-legacy-v1:
-	go test -tags vaps_legacy_v1 ./...
 
 clean:
 	rm -rf $(BUILD_DIR)
