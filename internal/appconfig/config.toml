@@ -1,0 +1,34 @@
+# vaps default configuration (TOML v1.1.0)
+#:tombi toml-version = "v1.1.0"
+
+addr = ":8588"
+data_dir = "data"
+metadata_db = "data/metadata.db"
+auth_db = "data/auth.db"
+upload_db = "data/uploads.db"
+log_dir = "logs"
+log_retention_days = 7
+status_log_interval = "1m"
+
+[cache]
+bytes = "64MiB"
+max_object_bytes = "4MiB"
+
+[auth]
+expire_time = "30m"
+
+[upload]
+direct_max_bytes = "8MiB"
+expiration = "24h"
+cleanup_interval = "1m"
+dir = "data/uploads"
+
+[backup]
+backend = []
+flush_interval = "1m"
+max_pending = 50
+svn = {
+    url = "",
+    bin = "svn",
+    mucc_bin = "svnmucc",
+}

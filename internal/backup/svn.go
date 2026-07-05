@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"vaps/internal/blobstore"
-	"vaps/internal/iohash"
+	"vaps/internal/utils"
 )
 
 var ErrBackupHashMismatch = errors.New("backup payload hash does not match requested iohash")
@@ -315,7 +315,7 @@ func (s *SVNBackend) writeTemp(hash string, reader io.Reader) (string, error) {
 		}
 	}()
 
-	hasher := iohash.New()
+	hasher := utils.NewIoHash()
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), reader); err != nil {
 		_ = tmp.Close()
 		return "", err
@@ -327,7 +327,7 @@ func (s *SVNBackend) writeTemp(hash string, reader io.Reader) (string, error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	actual := iohash.DigestHex(hasher)
+	actual := utils.IoHashDigestHex(hasher)
 	if actual != hash {
 		return "", fmt.Errorf("%w: got %s want %s", ErrBackupHashMismatch, actual, hash)
 	}

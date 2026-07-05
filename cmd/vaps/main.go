@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,7 +20,7 @@ import (
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
-	"vaps/internal/logfile"
+	"vaps/internal/utils"
 	"vaps/internal/metadata"
 	"vaps/internal/uploadsession"
 )
@@ -62,7 +61,7 @@ func run() int {
 	defer meta.Close()
 
 	store := blobstore.New(cfg.DataDir)
-	lru := cache.New(cfg.Cache.Bytes, cfg.Cache.MaxObjectBytes)
+	lru := cache.New(cfg.Cache.Bytes.Int64(), cfg.Cache.MaxObjectBytes.Int64())
 	backupBackend, err := setupBackup(ctx, cfg, store, meta)
 	if err != nil {
 		log.Print(err)
@@ -74,8 +73,7 @@ func run() int {
 		return 1
 	}
 	defer authStore.Close()
-	uploadsDir := filepath.Join(cfg.DataDir, "uploads")
-	uploads, err := uploadsession.Open(cfg.UploadDB, uploadsDir, time.Duration(cfg.Upload.Expiration), time.Duration(cfg.Upload.CleanupInterval))
+	uploads, err := uploadsession.Open(cfg.UploadDB, cfg.Upload.Dir, time.Duration(cfg.Upload.Expiration), time.Duration(cfg.Upload.CleanupInterval))
 	if err != nil {
 		log.Print(err)
 		return 1
@@ -84,7 +82,7 @@ func run() int {
 	startUploadCleanup(ctx, uploads, time.Duration(cfg.Upload.CleanupInterval))
 	handler := httpapi.AccessLog(httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        time.Duration(cfg.Auth.ExpireTime),
-		UploadDirectMaxBytes:  cfg.Upload.DirectMaxBytes,
+		UploadDirectMaxBytes:  cfg.Upload.DirectMaxBytes.Int64(),
 		UploadExpiration:      time.Duration(cfg.Upload.Expiration),
 		UploadCleanupInterval: time.Duration(cfg.Upload.CleanupInterval),
 	}))
@@ -121,10 +119,16 @@ func run() int {
 }
 
 func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Store, meta *metadata.Store) (backup.Backend, error) {
-	var backend backup.Backend
-	switch strings.ToLower(strings.TrimSpace(cfg.Backup.Backend)) {
-	case "", "none":
+	backends := appconfig.EnabledBackupBackends(cfg.Backup.Backend)
+	if len(backends) == 0 {
 		return nil, nil
+	}
+	if len(backends) > 1 {
+		return nil, fmt.Errorf("multiple backup backends are not supported yet: %v", backends)
+	}
+
+	var backend backup.Backend
+	switch backends[0] {
 	case "svn":
 		created, err := backup.NewSVNBackend(backup.SVNConfig{
 			URL:        cfg.Backup.SVN.URL,
@@ -136,7 +140,7 @@ func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Sto
 		}
 		backend = created
 	default:
-		return nil, fmt.Errorf("unsupported backup backend %q", cfg.Backup.Backend)
+		return nil, fmt.Errorf("unsupported backup backend %q", backends[0])
 	}
 	metadataBackend := backup.NewEmptyMetadataBackend(backend)
 	startBackupMetadataRefresh(ctx, meta, metadataBackend)
@@ -258,7 +262,7 @@ func markBackupFailed(meta *metadata.Store, hash string, err error) {
 }
 
 func setupLogging(cfg appconfig.Config) (io.WriteCloser, error) {
-	writer, err := logfile.NewDailyRotatingWriter(cfg.LogDir, cfg.LogRetentionDays)
+	writer, err := utils.NewDailyRotatingWriter(cfg.LogDir, cfg.LogRetentionDays)
 	if err != nil {
 		return nil, err
 	}

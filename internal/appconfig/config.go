@@ -1,7 +1,8 @@
 package appconfig
 
 import (
-	"encoding/json"
+	"bytes"
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,51 +12,58 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"vaps/internal/utils"
 )
+
+//go:embed config.toml
+var defaultConfigTOML []byte
 
 type Duration time.Duration
 
 type Config struct {
-	Addr              string       `json:"addr"`
-	DataDir           string       `json:"data_dir"`
-	MetadataDB        string       `json:"metadata_db"`
-	AuthDB            string       `json:"auth_db"`
-	UploadDB          string       `json:"upload_db"`
-	LogDir            string       `json:"log_dir"`
-	LogRetentionDays  int          `json:"log_retention_days"`
-	StatusLogInterval Duration     `json:"status_log_interval"`
-	Cache             CacheConfig  `json:"cache"`
-	Auth              AuthConfig   `json:"auth"`
-	Upload            UploadConfig `json:"upload"`
-	Backup            BackupConfig `json:"backup"`
+	Addr              string       `toml:"addr"`
+	DataDir           string       `toml:"data_dir"`
+	MetadataDB        string       `toml:"metadata_db"`
+	AuthDB            string       `toml:"auth_db"`
+	UploadDB          string       `toml:"upload_db"`
+	LogDir            string       `toml:"log_dir"`
+	LogRetentionDays  int          `toml:"log_retention_days"`
+	StatusLogInterval Duration     `toml:"status_log_interval"`
+	Cache             CacheConfig  `toml:"cache"`
+	Auth              AuthConfig   `toml:"auth"`
+	Upload            UploadConfig `toml:"upload"`
+	Backup            BackupConfig `toml:"backup"`
 }
 
 type AuthConfig struct {
-	ExpireTime Duration `json:"expire_time"`
+	ExpireTime Duration `toml:"expire_time"`
 }
 
 type UploadConfig struct {
-	DirectMaxBytes  int64    `json:"direct_max_bytes"`
-	Expiration      Duration `json:"expiration"`
-	CleanupInterval Duration `json:"cleanup_interval"`
+	DirectMaxBytes  utils.ByteSize `toml:"direct_max_bytes"`
+	Expiration      Duration       `toml:"expiration"`
+	CleanupInterval Duration       `toml:"cleanup_interval"`
+	Dir             string         `toml:"dir"`
 }
 
 type CacheConfig struct {
-	Bytes          int64 `json:"bytes"`
-	MaxObjectBytes int64 `json:"max_object_bytes"`
+	Bytes          utils.ByteSize `toml:"bytes"`
+	MaxObjectBytes utils.ByteSize `toml:"max_object_bytes"`
 }
 
 type BackupConfig struct {
-	Backend       string          `json:"backend"`
-	FlushInterval Duration        `json:"flush_interval"`
-	MaxPending    int             `json:"max_pending"`
-	SVN           SVNBackupConfig `json:"svn"`
+	Backend       []string        `toml:"backend"`
+	FlushInterval Duration        `toml:"flush_interval"`
+	MaxPending    int             `toml:"max_pending"`
+	SVN           SVNBackupConfig `toml:"svn"`
 }
 
 type SVNBackupConfig struct {
-	URL     string `json:"url"`
-	Bin     string `json:"bin"`
-	MuccBin string `json:"mucc_bin" flag_alias:"backup-svnmucc-bin"`
+	URL     string `toml:"url"`
+	Bin     string `toml:"bin"`
+	MuccBin string `toml:"mucc_bin" flag_alias:"backup-svnmucc-bin"`
 }
 
 func FromArgs(args []string) (Config, error) {
@@ -70,18 +78,21 @@ func FromArgs(args []string) (Config, error) {
 }
 
 func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
-	cfg := defaultConfig()
+	cfg, err := loadDefaultConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	configPath, err := findConfigPath(args)
 	if err != nil {
 		return Config{}, err
 	}
 	if configPath != "" {
-		if err := loadJSONConfig(resolvePath(baseDir, configPath), &cfg); err != nil {
+		if err := loadTOMLConfig(resolvePath(baseDir, configPath), &cfg); err != nil {
 			return Config{}, err
 		}
 	}
 	flags := flag.NewFlagSet("vaps", flag.ContinueOnError)
-	flags.String("config", configPath, "JSON config file path")
+	flags.String("config", configPath, "TOML config file path")
 	if err := registerFlags(flags, &cfg); err != nil {
 		return Config{}, err
 	}
@@ -89,15 +100,6 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 		return Config{}, err
 	}
 	normalize(&cfg)
-	if cfg.MetadataDB == "" {
-		cfg.MetadataDB = filepath.Join(cfg.DataDir, "metadata.db")
-	}
-	if cfg.AuthDB == "" {
-		cfg.AuthDB = filepath.Join(cfg.DataDir, "auth.db")
-	}
-	if cfg.UploadDB == "" {
-		cfg.UploadDB = filepath.Join(cfg.DataDir, "uploads.db")
-	}
 	if err := validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -106,6 +108,7 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	cfg.MetadataDB = resolvePath(baseDir, cfg.MetadataDB)
 	cfg.AuthDB = resolvePath(baseDir, cfg.AuthDB)
 	cfg.UploadDB = resolvePath(baseDir, cfg.UploadDB)
+	cfg.Upload.Dir = resolvePath(baseDir, cfg.Upload.Dir)
 	return cfg, nil
 }
 
@@ -122,65 +125,52 @@ func (d *Duration) Set(value string) error {
 	return nil
 }
 
-func (d *Duration) UnmarshalJSON(data []byte) error {
-	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		return d.Set(text)
-	}
-	var nanos int64
-	if err := json.Unmarshal(data, &nanos); err != nil {
-		return errors.New("duration must be a string like \"1m\" or a number of nanoseconds")
-	}
-	*d = Duration(time.Duration(nanos))
-	return nil
+func (d *Duration) UnmarshalText(text []byte) error {
+	return d.Set(string(text))
 }
 
-func (d Duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.String())
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(d.String()), nil
 }
 
-func defaultConfig() Config {
-	return Config{
-		Addr:              ":8588",
-		DataDir:           "data",
-		LogDir:            "logs",
-		LogRetentionDays:  7,
-		StatusLogInterval: Duration(time.Minute),
-		Cache: CacheConfig{
-			Bytes:          64 * 1024 * 1024,
-			MaxObjectBytes: 4 * 1024 * 1024,
-		},
-		Auth: AuthConfig{
-			ExpireTime: Duration(30 * time.Minute),
-		},
-		Upload: UploadConfig{
-			DirectMaxBytes:  8 * 1024 * 1024,
-			Expiration:      Duration(24 * time.Hour),
-			CleanupInterval: Duration(time.Minute),
-		},
-		Backup: BackupConfig{
-			FlushInterval: Duration(time.Minute),
-			MaxPending:    100,
-			SVN: SVNBackupConfig{
-				Bin:     "svn",
-				MuccBin: "svnmucc",
-			},
-		},
+func loadDefaultConfig() (Config, error) {
+	var cfg Config
+	if err := decodeTOML(defaultConfigTOML, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse embedded default config: %w", err)
 	}
+	return cfg, nil
 }
 
-func loadJSONConfig(path string, cfg *Config) error {
+func decodeTOML(data []byte, cfg *Config) error {
+	md, err := toml.NewDecoder(bytes.NewReader(data)).Decode(cfg)
+	if err != nil {
+		return err
+	}
+	return rejectUnknownFields(md)
+}
+
+func loadTOMLConfig(path string, cfg *Config) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(file)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(cfg); err != nil {
+	md, err := toml.NewDecoder(file).Decode(cfg)
+	if err != nil {
+		return fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := rejectUnknownFields(md); err != nil {
 		return fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return nil
+}
+
+func rejectUnknownFields(md toml.MetaData) error {
+	undecoded := md.Undecoded()
+	if len(undecoded) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unknown field %q", undecoded[0].String())
 }
 
 func findConfigPath(args []string) (string, error) {
@@ -207,7 +197,7 @@ func registerFlags(flags *flag.FlagSet, cfg *Config) error {
 
 func registerValueFlags(flags *flag.FlagSet, prefix []string, value reflect.Value) error {
 	valueType := value.Type()
-	if valueType == reflect.TypeOf(Duration(0)) || value.Kind() != reflect.Struct {
+	if valueType == reflect.TypeOf(Duration(0)) || valueType == reflect.TypeOf(utils.ByteSize(0)) || value.Kind() != reflect.Struct {
 		registerFlag(flags, strings.Join(prefix, "-"), "override "+strings.Join(prefix, "."), value)
 		return nil
 	}
@@ -216,7 +206,7 @@ func registerValueFlags(flags *flag.FlagSet, prefix []string, value reflect.Valu
 		if !field.IsExported() {
 			continue
 		}
-		name := jsonFieldName(field)
+		name := configFieldName(field)
 		if name == "" {
 			continue
 		}
@@ -237,6 +227,14 @@ func registerFlag(flags *flag.FlagSet, name, usage string, value reflect.Value) 
 		flags.Var(durationFlag{value: value}, name, usage)
 		return
 	}
+	if value.Type() == reflect.TypeOf(utils.ByteSize(0)) {
+		flags.Var(byteSizeFlag{value: value}, name, usage)
+		return
+	}
+	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.String {
+		flags.Var(stringSliceFlag{value: value}, name, usage)
+		return
+	}
 	flags.Var(scalarFlag{value: value}, name, usage)
 }
 
@@ -251,8 +249,8 @@ func splitAliases(value string) []string {
 	return aliases
 }
 
-func jsonFieldName(field reflect.StructField) string {
-	name := strings.Split(field.Tag.Get("json"), ",")[0]
+func configFieldName(field reflect.StructField) string {
+	name := strings.Split(field.Tag.Get("toml"), ",")[0]
 	if name == "-" {
 		return ""
 	}
@@ -260,6 +258,62 @@ func jsonFieldName(field reflect.StructField) string {
 		return name
 	}
 	return strings.ToLower(field.Name)
+}
+
+type byteSizeFlag struct {
+	value reflect.Value
+}
+
+func (f byteSizeFlag) String() string {
+	return strconv.FormatInt(f.value.Int(), 10)
+}
+
+func (f byteSizeFlag) Set(value string) error {
+	var size utils.ByteSize
+	if err := size.Set(value); err != nil {
+		return err
+	}
+	f.value.SetInt(size.Int64())
+	return nil
+}
+
+type stringSliceFlag struct {
+	value reflect.Value
+}
+
+func (f stringSliceFlag) String() string {
+	if f.value.Len() == 0 {
+		return ""
+	}
+	parts := make([]string, f.value.Len())
+	for index := 0; index < f.value.Len(); index++ {
+		parts[index] = f.value.Index(index).String()
+	}
+	return strings.Join(parts, ",")
+}
+
+func (f stringSliceFlag) Set(value string) error {
+	parts := splitFlagList(value)
+	slice := reflect.MakeSlice(f.value.Type(), len(parts), len(parts))
+	for index, part := range parts {
+		slice.Index(index).SetString(part)
+	}
+	f.value.Set(slice)
+	return nil
+}
+
+func splitFlagList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := []string{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
 }
 
 type durationFlag struct {
@@ -319,10 +373,33 @@ func (f scalarFlag) Set(value string) error {
 }
 
 func normalize(cfg *Config) {
-	cfg.Backup.Backend = strings.ToLower(strings.TrimSpace(cfg.Backup.Backend))
+	cfg.Backup.Backend = normalizeBackupBackends(cfg.Backup.Backend)
 	cfg.Backup.SVN.URL = strings.TrimSpace(cfg.Backup.SVN.URL)
 	cfg.Backup.SVN.Bin = strings.TrimSpace(cfg.Backup.SVN.Bin)
 	cfg.Backup.SVN.MuccBin = strings.TrimSpace(cfg.Backup.SVN.MuccBin)
+}
+
+func normalizeBackupBackends(backends []string) []string {
+	normalized := make([]string, 0, len(backends))
+	for _, name := range backends {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		normalized = append(normalized, name)
+	}
+	return normalized
+}
+
+// EnabledBackupBackends returns configured backup backends excluding none entries.
+func EnabledBackupBackends(backends []string) []string {
+	enabled := make([]string, 0, len(backends))
+	for _, name := range backends {
+		if name != "none" {
+			enabled = append(enabled, name)
+		}
+	}
+	return enabled
 }
 
 func validate(cfg Config) error {
@@ -344,23 +421,40 @@ func validate(cfg Config) error {
 	if cfg.Backup.MaxPending < 0 {
 		return errors.New("backup-max-pending must not be negative")
 	}
-	switch cfg.Backup.Backend {
-	case "", "none":
-		return nil
-	case "svn":
-		if cfg.Backup.SVN.URL == "" {
-			return errors.New("backup-svn-url is required when backup backend is svn")
+	return validateBackupBackends(cfg.Backup.Backend, cfg.Backup.SVN)
+}
+
+func validateBackupBackends(backends []string, svn SVNBackupConfig) error {
+	seen := map[string]struct{}{}
+	svnEnabled := false
+	for _, name := range backends {
+		if name == "none" {
+			continue
 		}
-		if cfg.Backup.SVN.Bin == "" {
-			return errors.New("backup-svn-bin must not be empty when backup backend is svn")
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("duplicate backup backend %q", name)
 		}
-		if cfg.Backup.SVN.MuccBin == "" {
-			return errors.New("backup-svnmucc-bin must not be empty when backup backend is svn")
+		seen[name] = struct{}{}
+		switch name {
+		case "svn":
+			svnEnabled = true
+		default:
+			return errors.New("backup backend must be one of none, svn")
 		}
-		return nil
-	default:
-		return errors.New("backup backend must be one of none, svn")
 	}
+	if !svnEnabled {
+		return nil
+	}
+	if svn.URL == "" {
+		return errors.New("backup-svn-url is required when backup backend is svn")
+	}
+	if svn.Bin == "" {
+		return errors.New("backup-svn-bin must not be empty when backup backend is svn")
+	}
+	if svn.MuccBin == "" {
+		return errors.New("backup-svnmucc-bin must not be empty when backup backend is svn")
+	}
+	return nil
 }
 
 func resolvePath(baseDir, path string) string {

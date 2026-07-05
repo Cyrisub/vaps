@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"vaps/internal/iohash"
+	"vaps/internal/utils"
 	"vaps/internal/uploadsession"
 )
 
@@ -17,7 +17,7 @@ func TestCreateAppendAndComplete(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	hash := iohash.SumHex([]byte("hello"))
+	hash := utils.IoHashSumHex([]byte("hello"))
 	session, err := store.Create(hash, uploadsession.KindRegular, 5, nil)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -42,7 +42,7 @@ func TestFinalConcatBuildsCombinedUpload(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	hash := iohash.SumHex([]byte("hello"))
+	hash := utils.IoHashSumHex([]byte("hello"))
 	partialA, err := store.Create(hash, uploadsession.KindPartial, 2, nil)
 	if err != nil {
 		t.Fatalf("Create partial A: %v", err)

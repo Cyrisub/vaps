@@ -3,6 +3,7 @@ package appconfig_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,15 @@ func TestFromArgsUsesDefaults(t *testing.T) {
 	if cfg.MetadataDB != filepath.Join(binDir, "data", "metadata.db") {
 		t.Fatalf("MetadataDB = %q, want data/metadata.db under binary dir", cfg.MetadataDB)
 	}
+	if cfg.AuthDB != filepath.Join(binDir, "data", "auth.db") {
+		t.Fatalf("AuthDB = %q, want data/auth.db under binary dir", cfg.AuthDB)
+	}
+	if cfg.UploadDB != filepath.Join(binDir, "data", "uploads.db") {
+		t.Fatalf("UploadDB = %q, want data/uploads.db under binary dir", cfg.UploadDB)
+	}
+	if cfg.Upload.Dir != filepath.Join(binDir, "data", "uploads") {
+		t.Fatalf("Upload.Dir = %q, want data/uploads under binary dir", cfg.Upload.Dir)
+	}
 	if cfg.Cache.Bytes != 64*1024*1024 {
 		t.Fatalf("Cache.Bytes = %d, want 64MiB", cfg.Cache.Bytes)
 	}
@@ -34,14 +44,14 @@ func TestFromArgsUsesDefaults(t *testing.T) {
 	if time.Duration(cfg.StatusLogInterval) != time.Minute {
 		t.Fatalf("StatusLogInterval = %s, want 1m", cfg.StatusLogInterval)
 	}
-	if cfg.Backup.Backend != "" {
-		t.Fatalf("Backup.Backend = %q, want empty", cfg.Backup.Backend)
+	if len(cfg.Backup.Backend) != 0 {
+		t.Fatalf("Backup.Backend = %v, want empty", cfg.Backup.Backend)
 	}
 	if time.Duration(cfg.Backup.FlushInterval) != time.Minute {
 		t.Fatalf("Backup.FlushInterval = %s, want 1m", cfg.Backup.FlushInterval)
 	}
-	if cfg.Backup.MaxPending != 100 {
-		t.Fatalf("Backup.MaxPending = %d, want 100", cfg.Backup.MaxPending)
+	if cfg.Backup.MaxPending != 50 {
+		t.Fatalf("Backup.MaxPending = %d, want 50", cfg.Backup.MaxPending)
 	}
 	if cfg.Backup.SVN.Bin != "svn" {
 		t.Fatalf("Backup.SVN.Bin = %q, want svn", cfg.Backup.SVN.Bin)
@@ -52,7 +62,8 @@ func TestFromArgsUsesDefaults(t *testing.T) {
 }
 
 func TestFromArgsUsesFlags(t *testing.T) {
-	dataDir := filepath.Join(t.TempDir(), "vaps")
+	binDir := t.TempDir()
+	dataDir := filepath.Join(binDir, "vaps")
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
 		"-addr", "127.0.0.1:9000",
 		"-data-dir", dataDir,
@@ -65,7 +76,7 @@ func TestFromArgsUsesFlags(t *testing.T) {
 		"-backup-svn-url", "https://svn.example/repo",
 		"-backup-svn-bin", "custom-svn",
 		"-backup-svnmucc-bin", "custom-svnmucc",
-	}, t.TempDir())
+	}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -75,7 +86,7 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	if cfg.DataDir != dataDir {
 		t.Fatalf("DataDir = %q, want %q", cfg.DataDir, dataDir)
 	}
-	if cfg.MetadataDB != filepath.Join(dataDir, "metadata.db") {
+	if cfg.MetadataDB != filepath.Join(binDir, "data", "metadata.db") {
 		t.Fatalf("MetadataDB = %q", cfg.MetadataDB)
 	}
 	if cfg.Cache.Bytes != 1024 {
@@ -87,8 +98,8 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	if time.Duration(cfg.StatusLogInterval) != 2*time.Minute {
 		t.Fatalf("StatusLogInterval = %s, want 2m", cfg.StatusLogInterval)
 	}
-	if cfg.Backup.Backend != "svn" {
-		t.Fatalf("Backup.Backend = %q, want svn", cfg.Backup.Backend)
+	if !reflect.DeepEqual(cfg.Backup.Backend, []string{"svn"}) {
+		t.Fatalf("Backup.Backend = %v, want [svn]", cfg.Backup.Backend)
 	}
 	if time.Duration(cfg.Backup.FlushInterval) != 5*time.Second {
 		t.Fatalf("Backup.FlushInterval = %s, want 5s", cfg.Backup.FlushInterval)
@@ -107,23 +118,30 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	}
 }
 
-func TestFromArgsLoadsJSONConfig(t *testing.T) {
+func TestFromArgsLoadsTOMLConfig(t *testing.T) {
 	binDir := t.TempDir()
-	configPath := writeConfig(t, binDir, `{
-		"addr": "127.0.0.1:9000",
-		"data_dir": "payloads",
-		"metadata_db": "meta/vaps.db",
-		"log_dir": "logz",
-		"log_retention_days": 3,
-		"status_log_interval": "30s",
-		"cache": {"bytes": 2048, "max_object_bytes": 256},
-		"backup": {
-			"backend": "svn",
-			"flush_interval": "10s",
-			"max_pending": 3,
-			"svn": {"url": "https://svn.example/repo", "bin": "custom-svn", "mucc_bin": "custom-svnmucc"}
-		}
-	}`)
+	configPath := writeConfig(t, binDir, `
+addr = "127.0.0.1:9000"
+data_dir = "payloads"
+metadata_db = "meta/vaps.db"
+log_dir = "logz"
+log_retention_days = 3
+status_log_interval = "30s"
+
+[cache]
+bytes = 2048
+max_object_bytes = 256
+
+[backup]
+backend = ["svn"]
+flush_interval = "10s"
+max_pending = 3
+
+[backup.svn]
+url = "https://svn.example/repo"
+bin = "custom-svn"
+mucc_bin = "custom-svnmucc"
+`)
 
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
 	if err != nil {
@@ -161,13 +179,20 @@ func TestFromArgsLoadsJSONConfig(t *testing.T) {
 	}
 }
 
-func TestFromArgsCommandLineOverridesJSONConfig(t *testing.T) {
+func TestFromArgsCommandLineOverridesTOMLConfig(t *testing.T) {
 	binDir := t.TempDir()
-	configPath := writeConfig(t, binDir, `{
-		"addr": ":8588",
-		"cache": {"bytes": 2048},
-		"backup": {"backend": "svn", "svn": {"url": "https://svn.example/old"}}
-	}`)
+	configPath := writeConfig(t, binDir, `
+addr = ":8588"
+
+[cache]
+bytes = 2048
+
+[backup]
+backend = ["svn"]
+
+[backup.svn]
+url = "https://svn.example/old"
+`)
 
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
 		"-config", configPath,
@@ -189,9 +214,51 @@ func TestFromArgsCommandLineOverridesJSONConfig(t *testing.T) {
 	}
 }
 
-func TestFromArgsRejectsUnknownJSONField(t *testing.T) {
+func TestFromArgsLoadsTOMLConfigHumanReadableBytes(t *testing.T) {
 	binDir := t.TempDir()
-	configPath := writeConfig(t, binDir, `{"unexpected": true}`)
+	configPath := writeConfig(t, binDir, `
+[cache]
+bytes = "2MiB"
+max_object_bytes = "512KiB"
+
+[upload]
+direct_max_bytes = 4096
+`)
+
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
+	if err != nil {
+		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
+	}
+	if cfg.Cache.Bytes.Int64() != 2*1024*1024 {
+		t.Fatalf("Cache.Bytes = %d, want 2MiB", cfg.Cache.Bytes.Int64())
+	}
+	if cfg.Cache.MaxObjectBytes.Int64() != 512*1024 {
+		t.Fatalf("Cache.MaxObjectBytes = %d, want 512KiB", cfg.Cache.MaxObjectBytes.Int64())
+	}
+	if cfg.Upload.DirectMaxBytes.Int64() != 4096 {
+		t.Fatalf("Upload.DirectMaxBytes = %d, want 4096", cfg.Upload.DirectMaxBytes.Int64())
+	}
+}
+
+func TestFromArgsUsesFlagsHumanReadableBytes(t *testing.T) {
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{
+		"-cache-bytes", "1MiB",
+		"-upload-direct-max-bytes", "2MiB",
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
+	}
+	if cfg.Cache.Bytes.Int64() != 1024*1024 {
+		t.Fatalf("Cache.Bytes = %d, want 1MiB", cfg.Cache.Bytes.Int64())
+	}
+	if cfg.Upload.DirectMaxBytes.Int64() != 2*1024*1024 {
+		t.Fatalf("Upload.DirectMaxBytes = %d, want 2MiB", cfg.Upload.DirectMaxBytes.Int64())
+	}
+}
+
+func TestFromArgsRejectsUnknownTOMLField(t *testing.T) {
+	binDir := t.TempDir()
+	configPath := writeConfig(t, binDir, `unexpected = true`)
 
 	_, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
 	if err == nil {
@@ -241,8 +308,8 @@ func TestFromArgsAllowsNoneBackupBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
-	if cfg.Backup.Backend != "none" {
-		t.Fatalf("Backup.Backend = %q, want none", cfg.Backup.Backend)
+	if !reflect.DeepEqual(cfg.Backup.Backend, []string{"none"}) {
+		t.Fatalf("Backup.Backend = %v, want [none]", cfg.Backup.Backend)
 	}
 }
 
@@ -251,8 +318,8 @@ func TestFromArgsAllowsUppercaseBackupBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
-	if cfg.Backup.Backend != "svn" {
-		t.Fatalf("Backup.Backend = %q, want svn", cfg.Backup.Backend)
+	if !reflect.DeepEqual(cfg.Backup.Backend, []string{"svn"}) {
+		t.Fatalf("Backup.Backend = %v, want [svn]", cfg.Backup.Backend)
 	}
 }
 
@@ -302,7 +369,7 @@ func TestFromArgsWithBaseDirKeepsAbsolutePaths(t *testing.T) {
 
 func writeConfig(t *testing.T, dir, content string) string {
 	t.Helper()
-	path := filepath.Join(dir, "vaps.json")
+	path := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

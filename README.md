@@ -46,48 +46,13 @@ Run the server with defaults:
 ./bin/vaps
 ```
 
-Or use a JSON config file:
+Or use a TOML config file:
 
 ```sh
-./bin/vaps -config vaps.json
+./bin/vaps -config config.toml
 ```
 
-Example `vaps.json`:
-
-```json
-{
-  "addr": ":8588",
-  "data_dir": "data",
-  "metadata_db": "",
-  "log_dir": "logs",
-  "log_retention_days": 7,
-  "status_log_interval": "1m",
-  "cache": {
-    "bytes": 67108864,
-    "max_object_bytes": 4194304
-  },
-  "auth": {
-    "expire_time": "30m"
-  },
-  "upload": {
-    "direct_max_bytes": 8388608,
-    "expiration": "24h",
-    "cleanup_interval": "1m"
-  },
-  "backup": {
-    "backend": "svn",
-    "flush_interval": "1m",
-    "max_pending": 100,
-    "svn": {
-      "url": "https://svn.example.com/repo/vaps-backup",
-      "bin": "svn",
-      "mucc_bin": "svnmucc"
-    }
-  }
-}
-```
-
-Command-line flags can still override config values. Flag names are derived from JSON paths, for example `-addr`, `-data-dir`, `-cache-bytes`, `-backup-backend`, `-backup-flush-interval`, `-backup-max-pending`, and `-backup-svn-url`. The legacy `-backup-svnmucc-bin` flag is also accepted.
+Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-data-dir`, `-cache-bytes`, `-backup-backend`, `-backup-flush-interval`, `-backup-max-pending`, and `-backup-svn-url`. The legacy `-backup-svnmucc-bin` flag is also accepted.
 
 By default, payload blobs are stored under `data/blobs` and metadata is stored in `data/metadata.db`.
 Relative paths are resolved from the directory that contains the `vaps` binary, not from the shell's current working directory.
@@ -96,11 +61,13 @@ Access logs are written for every HTTP request. Status logs are written every mi
 
 ## Backup
 
-Backup support is optional. Enable the SVN backend with `backup.backend` and `backup.svn.url` in `vaps.json`, or override them from the command line:
+Backup support is optional. Enable the SVN backend with `backup.backend = ["svn"]` and `backup.svn.url` in `config.toml`, or override them from the command line:
 
 ```sh
-./bin/vaps -config vaps.json -backup-backend svn -backup-svn-url https://svn.example.com/repo/vaps-backup
+./bin/vaps -config config.toml -backup-backend svn -backup-svn-url https://svn.example.com/repo/vaps-backup
 ```
+
+Multiple comma-separated values can be passed to `-backup-backend`, for example `-backup-backend svn,none`.
 
 The SVN backend stores payloads under the configured backup root using a three-level hash shard path: `<hash[0:2]>/<hash[2:4]>/<hash[4:6]>/<hash[6:]>.upayload`. On startup, VAPS starts a background refresh of the in-memory backup metadata set; for SVN this is a recursive `svn list` of the configured backup root. Listed backup payloads are merged into the main metadata database as backup-only records when no local record exists. A later `GET /v1/payload` for a backup-only payload downloads it from the backend, writes it into local blobs, and updates the metadata with the local size. Payload uploads are queued as `pending` and flushed in batches when `backup.flush_interval` elapses or `backup.max_pending` is reached, reducing small SVN commits. Set `backup.svn.bin` and `backup.svn.mucc_bin`, or use command-line overrides, to choose different binary names when needed.
 

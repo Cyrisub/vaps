@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"vaps/internal/iohash"
+	"vaps/internal/utils"
 	"vaps/internal/testserver"
 )
 
@@ -21,7 +21,7 @@ const (
 )
 
 func ioHash(payload []byte) string {
-	return iohash.SumHex(payload)
+	return utils.IoHashSumHex(payload)
 }
 
 func bearer(token string) string {

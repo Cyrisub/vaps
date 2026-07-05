@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"vaps/internal/iohash"
+	"vaps/internal/utils"
 	"vaps/internal/platform"
 )
 
@@ -73,7 +73,7 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 		}
 	}()
 
-	hasher := iohash.New()
+	hasher := utils.NewIoHash()
 	size, copyErr := io.Copy(io.MultiWriter(tmp, hasher), reader)
 	if copyErr != nil {
 		_ = tmp.Close()
@@ -87,7 +87,7 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 		return Info{}, err
 	}
 
-	actual := iohash.DigestHex(hasher)
+	actual := utils.IoHashDigestHex(hasher)
 	if actual != hash {
 		return Info{}, fmt.Errorf("%w: got %s want %s", ErrHashMismatch, actual, hash)
 	}
@@ -149,7 +149,7 @@ func (s *Store) Open(hash string) (io.ReadCloser, Info, error) {
 }
 
 func ValidHash(hash string) bool {
-	return iohash.Valid(hash)
+	return utils.IoHashValid(hash)
 }
 
 func (s *Store) stat(hash, path string) (Info, error) {

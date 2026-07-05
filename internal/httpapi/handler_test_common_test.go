@@ -3,12 +3,12 @@ package httpapi_test
 import (
 	"testing"
 
-	"vaps/internal/iohash"
+	"vaps/internal/utils"
 	"vaps/internal/metadata"
 )
 
 func ioHash(payload []byte) string {
-	return iohash.SumHex(payload)
+	return utils.IoHashSumHex(payload)
 }
 
 func openMetadata(t *testing.T) *metadata.Store {
