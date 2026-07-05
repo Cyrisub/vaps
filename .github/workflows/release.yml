@@ -1,0 +1,252 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check semantic version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'; then
+            echo "Tag '$TAG' is not valid semantic versioning (expected vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+
+  resolve-release-type:
+    name: Resolve release type
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      draft: ${{ steps.classify.outputs.draft }}
+      prerelease: ${{ steps.classify.outputs.prerelease }}
+      release_kind: ${{ steps.classify.outputs.release_kind }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify release by branch
+        id: classify
+        run: |
+          set -euo pipefail
+
+          git fetch origin --prune
+
+          commit="$(git rev-parse HEAD)"
+          branches="$(git branch -r --contains "$commit" | sed 's/^[* ]*//' | grep -v 'HEAD ->' || true)"
+
+          release_kind="draft"
+          if echo "$branches" | grep -qxE 'origin/(main|master)'; then
+            release_kind="release"
+          elif echo "$branches" | grep -qxE 'origin/dev'; then
+            release_kind="prerelease"
+          fi
+
+          case "$release_kind" in
+            release)
+              draft=false
+              prerelease=false
+              ;;
+            prerelease)
+              draft=false
+              prerelease=true
+              ;;
+            *)
+              draft=true
+              prerelease=false
+              ;;
+          esac
+
+          echo "Tagged commit: $commit"
+          echo "Matching branches:"
+          echo "$branches"
+          echo "Release kind: $release_kind"
+
+          {
+            echo "draft=$draft"
+            echo "prerelease=$prerelease"
+            echo "release_kind=$release_kind"
+          } >> "$GITHUB_OUTPUT"
+
+  verify-test:
+    name: Verify Test workflow
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for successful Test run on commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 60); do
+            read -r status conclusion <<< "$(
+              gh run list \
+                --workflow=test.yml \
+                --commit="$COMMIT" \
+                --limit 1 \
+                --json status,conclusion \
+                --jq 'if length == 0 then "missing null" else "\(.[0].status) \(.[0].conclusion // "null")" end'
+            )"
+
+            if [ "$status" = "completed" ] && [ "$conclusion" = "success" ]; then
+              echo "Test workflow succeeded for commit $COMMIT."
+              exit 0
+            fi
+
+            if [ "$status" = "completed" ] && [ "$conclusion" != "null" ] && [ "$conclusion" != "success" ]; then
+              echo "Test workflow finished with conclusion: $conclusion"
+              exit 1
+            fi
+
+            echo "Waiting for Test workflow on $COMMIT ($attempt/60)..."
+            sleep 15
+          done
+
+          echo "Timed out waiting for a successful Test workflow on commit $COMMIT."
+          exit 1
+
+  release:
+    name: Publish release
+    needs: [verify-test, resolve-release-type]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release artifacts
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p dist/bin dist/pkg
+
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+          )
+
+          for platform in "${platforms[@]}"; do
+            goos="${platform%%/*}"
+            goarch="${platform##*/}"
+            name="vaps-${version}-${goos}-${goarch}"
+            binary="dist/bin/${name}"
+            if [ "$goos" = "windows" ]; then
+              binary="${binary}.exe"
+            fi
+
+            GOOS="$goos" GOARCH="$goarch" go build -o "$binary" ./cmd/vaps
+
+            if [ "$goos" = "windows" ] || [ "$goos" = "darwin" ]; then
+              (cd dist/bin && zip -q "../pkg/${name}.zip" "$(basename "$binary")")
+            else
+              tar -czf "dist/pkg/${name}.tar.gz" -C dist/bin "$(basename "$binary")"
+            fi
+          done
+
+          (cd dist/pkg && sha256sum *.tar.gz *.zip | sort -k2 > checksums.txt)
+
+      - name: Resolve existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          RELEASE_KIND: ${{ needs.resolve-release-type.outputs.release_kind }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "No existing release for $TAG."
+            exit 0
+          fi
+
+          if [ "$RELEASE_KIND" = "release" ]; then
+            echo "Formal release '$TAG' already exists. Duplicate formal releases are not allowed."
+            exit 1
+          fi
+
+          echo "Deleting existing release '$TAG' before republishing."
+          gh release delete "$TAG" --yes
+
+          for _ in $(seq 1 12); do
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release '$TAG' deleted."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for release '$TAG' to be deleted."
+          exit 1
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ github.ref_name }}
+          RELEASE_KIND: ${{ needs.resolve-release-type.outputs.release_kind }}
+        run: |
+          set -euo pipefail
+
+          {
+            if [ "$RELEASE_KIND" = "release" ]; then
+              prev_tag="$(
+                git tag -l 'v*' --sort=-version:refname \
+                  | awk -v cur="$TAG" '$0 == cur { found = 1; next } found { print; exit }'
+              )"
+
+              echo "## Summary"
+              echo
+              if [ -n "$prev_tag" ]; then
+                echo "Changes since \`${prev_tag}\`:"
+                echo
+                git log "${prev_tag}..${TAG}" --pretty=format:'- %s (%h)' --reverse
+              else
+                echo "Initial release:"
+                echo
+                git log "${TAG}" --pretty=format:'- %s (%h)' --reverse
+              fi
+              echo
+              echo
+            fi
+
+            echo "## Artifacts"
+            echo
+            while read -r hash file; do
+              echo "- \`${file}\`: \`${hash}\`"
+            done < dist/pkg/checksums.txt
+          } > release-notes.md
+
+          cat release-notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: ${{ needs.resolve-release-type.outputs.draft == 'true' }}
+          prerelease: ${{ needs.resolve-release-type.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/pkg/*.tar.gz
+            dist/pkg/*.zip

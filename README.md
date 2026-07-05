@@ -8,9 +8,35 @@ A Go HTTP server for virtual asset payload storage.
 make fmt
 make vet
 make test
+make test-functional
 make build
 make build-legacy-v1
 ```
+
+## Release
+
+Releases are published automatically when a semantic version tag is pushed to GitHub. Pushes to `dev` run unit and functional tests in the `Test` workflow; release waits for that workflow to succeed on the tagged commit, then builds and uploads cross-platform binaries.
+
+Tag format (SemVer):
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and `.zip` on macOS and Windows. SHA256 checksums for each archive are listed in the release notes.
+
+GitHub also attaches automatic "Source code (zip/tar.gz)" downloads to every release. That behavior is controlled by GitHub and cannot be disabled from the workflow.
+
+Release type is chosen from the branch that contains the tagged commit:
+
+| Branch | GitHub release type |
+|--------|---------------------|
+| `main` or `master` | Latest (formal release) |
+| `dev` | Pre-release |
+| Any other branch | Draft |
+
+The release title is the tag (for example `v0.0.1`). Formal releases include a commit summary since the previous tag; every release lists SHA256 checksums for its binary archives so republished builds with the same tag can be compared. Pre-releases and drafts may replace an existing release with the same tag; formal releases reject duplicate tags.
 
 The default binary is written to `bin/vaps`. The legacy build enables v1 and backup HTTP endpoints via the `vaps_legacy_v1` build tag and is written to `bin/vaps-legacy`.
 
