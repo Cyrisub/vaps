@@ -34,6 +34,9 @@ func run() int {
 	defer stop()
 
 	cfg, err := appconfig.FromArgs(nil)
+	if errors.Is(err, appconfig.ErrHelp) {
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

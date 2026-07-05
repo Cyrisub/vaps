@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/alecthomas/kong v1.14.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 )

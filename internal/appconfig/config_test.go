@@ -65,17 +65,17 @@ func TestFromArgsUsesFlags(t *testing.T) {
 	binDir := t.TempDir()
 	dataDir := filepath.Join(binDir, "vaps")
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
-		"-addr", "127.0.0.1:9000",
-		"-data-dir", dataDir,
-		"-cache-bytes", "1024",
-		"-cache-max-object-bytes", "128",
-		"-status-log-interval", "2m",
-		"-backup-backend", "svn",
-		"-backup-flush-interval", "5s",
-		"-backup-max-pending", "7",
-		"-backup-svn-url", "https://svn.example/repo",
-		"-backup-svn-bin", "custom-svn",
-		"-backup-svnmucc-bin", "custom-svnmucc",
+		"--addr", "127.0.0.1:9000",
+		"--data-dir", dataDir,
+		"--cache-bytes", "1024",
+		"--cache-max-object-bytes", "128",
+		"--status-log-interval", "2m",
+		"--backup-backend", "svn",
+		"--backup-flush-interval", "5s",
+		"--backup-max-pending", "7",
+		"--backup-svn-url", "https://svn.example/repo",
+		"--backup-svn-bin", "custom-svn",
+		"--backup-svn-mucc-bin", "custom-svnmucc",
 	}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
@@ -143,7 +143,7 @@ bin = "custom-svn"
 mucc_bin = "custom-svnmucc"
 `)
 
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-c", configPath}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -195,10 +195,10 @@ url = "https://svn.example/old"
 `)
 
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
-		"-config", configPath,
-		"-addr", "127.0.0.1:9001",
-		"-cache-bytes", "4096",
-		"-backup-svn-url", "https://svn.example/new",
+		"--config", configPath,
+		"--addr", "127.0.0.1:9001",
+		"--cache-bytes", "4096",
+		"--backup-svn-url", "https://svn.example/new",
 	}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
@@ -225,7 +225,7 @@ max_object_bytes = "512KiB"
 direct_max_bytes = 4096
 `)
 
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--config", configPath}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -242,8 +242,8 @@ direct_max_bytes = 4096
 
 func TestFromArgsUsesFlagsHumanReadableBytes(t *testing.T) {
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
-		"-cache-bytes", "1MiB",
-		"-upload-direct-max-bytes", "2MiB",
+		"--cache-bytes", "1MiB",
+		"--upload-direct-max-bytes", "2MiB",
 	}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
@@ -260,7 +260,7 @@ func TestFromArgsRejectsUnknownTOMLField(t *testing.T) {
 	binDir := t.TempDir()
 	configPath := writeConfig(t, binDir, `unexpected = true`)
 
-	_, err := appconfig.FromArgsWithBaseDir([]string{"-config", configPath}, binDir)
+	_, err := appconfig.FromArgsWithBaseDir([]string{"-c", configPath}, binDir)
 	if err == nil {
 		t.Fatalf("FromArgsWithBaseDir error = nil, want unknown field error")
 	}
@@ -270,7 +270,7 @@ func TestFromArgsRejectsUnknownTOMLField(t *testing.T) {
 }
 
 func TestFromArgsRejectsSVNBackupWithoutURL(t *testing.T) {
-	_, err := appconfig.FromArgsWithBaseDir([]string{"-backup-backend=svn"}, t.TempDir())
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend=svn"}, t.TempDir())
 	if err == nil {
 		t.Fatalf("FromArgsWithBaseDir error = nil, want missing SVN URL error")
 	}
@@ -282,7 +282,7 @@ func TestFromArgsRejectsSVNBackupWithoutURL(t *testing.T) {
 func TestFromArgsNilUsesProcessArgs(t *testing.T) {
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
-	os.Args = []string{"vaps", "-backup-backend=svn"}
+	os.Args = []string{"vaps", "--backup-backend=svn"}
 
 	_, err := appconfig.FromArgs(nil)
 	if err == nil {
@@ -294,7 +294,7 @@ func TestFromArgsNilUsesProcessArgs(t *testing.T) {
 }
 
 func TestFromArgsRejectsUnknownBackupBackend(t *testing.T) {
-	_, err := appconfig.FromArgsWithBaseDir([]string{"-backup-backend", "unknown"}, t.TempDir())
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend", "unknown"}, t.TempDir())
 	if err == nil {
 		t.Fatalf("FromArgsWithBaseDir error = nil, want unknown backup backend error")
 	}
@@ -304,7 +304,7 @@ func TestFromArgsRejectsUnknownBackupBackend(t *testing.T) {
 }
 
 func TestFromArgsAllowsNoneBackupBackend(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-backup-backend", "none"}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend", "none"}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestFromArgsAllowsNoneBackupBackend(t *testing.T) {
 }
 
 func TestFromArgsAllowsUppercaseBackupBackend(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-backup-backend", "SVN", "-backup-svn-url", "https://svn.example/repo"}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend", "SVN", "--backup-svn-url", "https://svn.example/repo"}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestFromArgsAllowsUppercaseBackupBackend(t *testing.T) {
 
 func TestFromArgsAllowsMetadataDBOverride(t *testing.T) {
 	metadataDB := filepath.Join(t.TempDir(), "custom.db")
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-metadata-db", metadataDB}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--metadata-db", metadataDB}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestFromArgsAllowsMetadataDBOverride(t *testing.T) {
 func TestFromArgsWithBaseDirResolvesRelativePathsFromBinaryDir(t *testing.T) {
 	binDir := t.TempDir()
 
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-data-dir", "payloads", "-metadata-db", "meta/vaps.db"}, binDir)
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--data-dir", "payloads", "--metadata-db", "meta/vaps.db"}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestFromArgsWithBaseDirResolvesRelativePathsFromBinaryDir(t *testing.T) {
 func TestFromArgsWithBaseDirKeepsAbsolutePaths(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "vaps")
 	metadataDB := filepath.Join(t.TempDir(), "custom.db")
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"-data-dir", dataDir, "-metadata-db", metadataDB}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--data-dir", dataDir, "--metadata-db", metadataDB}, t.TempDir())
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -364,6 +364,20 @@ func TestFromArgsWithBaseDirKeepsAbsolutePaths(t *testing.T) {
 	}
 	if cfg.MetadataDB != metadataDB {
 		t.Fatalf("MetadataDB = %q, want %q", cfg.MetadataDB, metadataDB)
+	}
+}
+
+func TestFromArgsRejectsSingleDashOverride(t *testing.T) {
+	_, err := appconfig.FromArgsWithBaseDir([]string{"-addr", ":9000"}, t.TempDir())
+	if err == nil {
+		t.Fatalf("FromArgsWithBaseDir error = nil, want single-dash override rejection")
+	}
+}
+
+func TestFromArgsReturnsHelp(t *testing.T) {
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--help"}, t.TempDir())
+	if err != appconfig.ErrHelp {
+		t.Fatalf("FromArgsWithBaseDir error = %v, want ErrHelp", err)
 	}
 }
 

@@ -41,10 +41,10 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	_ = listener.Close()
 
 	cmd := exec.Command(binary,
-		"-addr", addr,
-		"-data-dir", dataDir,
-		"-log-dir", logDir,
-		"-status-log-interval", "0s",
+		"--addr", addr,
+		"--data-dir", dataDir,
+		"--log-dir", logDir,
+		"--status-log-interval", "0s",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

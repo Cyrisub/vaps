@@ -4,12 +4,9 @@ import (
 	"bytes"
 	_ "embed"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,47 +20,47 @@ var defaultConfigTOML []byte
 type Duration time.Duration
 
 type Config struct {
-	Addr              string       `toml:"addr"`
-	DataDir           string       `toml:"data_dir"`
-	MetadataDB        string       `toml:"metadata_db"`
-	AuthDB            string       `toml:"auth_db"`
-	UploadDB          string       `toml:"upload_db"`
-	LogDir            string       `toml:"log_dir"`
-	LogRetentionDays  int          `toml:"log_retention_days"`
-	StatusLogInterval Duration     `toml:"status_log_interval"`
-	Cache             CacheConfig  `toml:"cache"`
-	Auth              AuthConfig   `toml:"auth"`
-	Upload            UploadConfig `toml:"upload"`
-	Backup            BackupConfig `toml:"backup"`
+	Addr              string       `toml:"addr" hidden:"" name:"addr"`
+	DataDir           string       `toml:"data_dir" hidden:"" name:"data-dir"`
+	MetadataDB        string       `toml:"metadata_db" hidden:"" name:"metadata-db"`
+	AuthDB            string       `toml:"auth_db" hidden:"" name:"auth-db"`
+	UploadDB          string       `toml:"upload_db" hidden:"" name:"upload-db"`
+	LogDir            string       `toml:"log_dir" hidden:"" name:"log-dir"`
+	LogRetentionDays  int          `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
+	StatusLogInterval Duration     `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
+	Cache             CacheConfig  `toml:"cache" embed:"" prefix:"cache-"`
+	Auth              AuthConfig   `toml:"auth" embed:"" prefix:"auth-"`
+	Upload            UploadConfig `toml:"upload" embed:"" prefix:"upload-"`
+	Backup            BackupConfig `toml:"backup" embed:"" prefix:"backup-"`
 }
 
 type AuthConfig struct {
-	ExpireTime Duration `toml:"expire_time"`
+	ExpireTime Duration `toml:"expire_time" hidden:"" name:"expire-time"`
 }
 
 type UploadConfig struct {
-	DirectMaxBytes  utils.ByteSize `toml:"direct_max_bytes"`
-	Expiration      Duration       `toml:"expiration"`
-	CleanupInterval Duration       `toml:"cleanup_interval"`
-	Dir             string         `toml:"dir"`
+	DirectMaxBytes  utils.ByteSize `toml:"direct_max_bytes" hidden:"" name:"direct-max-bytes"`
+	Expiration      Duration       `toml:"expiration" hidden:"" name:"expiration"`
+	CleanupInterval Duration       `toml:"cleanup_interval" hidden:"" name:"cleanup-interval"`
+	Dir             string         `toml:"dir" hidden:"" name:"dir"`
 }
 
 type CacheConfig struct {
-	Bytes          utils.ByteSize `toml:"bytes"`
-	MaxObjectBytes utils.ByteSize `toml:"max_object_bytes"`
+	Bytes          utils.ByteSize `toml:"bytes" hidden:"" name:"bytes"`
+	MaxObjectBytes utils.ByteSize `toml:"max_object_bytes" hidden:"" name:"max-object-bytes"`
 }
 
 type BackupConfig struct {
-	Backend       []string        `toml:"backend"`
-	FlushInterval Duration        `toml:"flush_interval"`
-	MaxPending    int             `toml:"max_pending"`
-	SVN           SVNBackupConfig `toml:"svn"`
+	Backend       []string        `toml:"backend" hidden:"" name:"backend"`
+	FlushInterval Duration        `toml:"flush_interval" hidden:"" name:"flush-interval"`
+	MaxPending    int             `toml:"max_pending" hidden:"" name:"max-pending"`
+	SVN           SVNBackupConfig `toml:"svn" embed:"" prefix:"svn-"`
 }
 
 type SVNBackupConfig struct {
-	URL     string `toml:"url"`
-	Bin     string `toml:"bin"`
-	MuccBin string `toml:"mucc_bin" flag_alias:"backup-svnmucc-bin"`
+	URL     string `toml:"url" hidden:"" name:"url"`
+	Bin     string `toml:"bin" hidden:"" name:"bin"`
+	MuccBin string `toml:"mucc_bin" hidden:"" name:"mucc-bin" aliases:"backup-svnmucc-bin"`
 }
 
 func FromArgs(args []string) (Config, error) {
@@ -82,21 +79,22 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	configPath, err := findConfigPath(args)
+	configPath, err := parseConfigPath(args)
 	if err != nil {
 		return Config{}, err
 	}
-	if configPath != "" {
-		if err := loadTOMLConfig(resolvePath(baseDir, configPath), &cfg); err != nil {
+	resolvedConfigPath := resolvePath(baseDir, configPath)
+	configLoaded, err := configFileExists(resolvedConfigPath)
+	if err != nil {
+		return Config{}, err
+	}
+	if configLoaded {
+		if err := loadTOMLConfig(resolvedConfigPath, &cfg); err != nil {
 			return Config{}, err
 		}
 	}
-	flags := flag.NewFlagSet("vaps", flag.ContinueOnError)
-	flags.String("config", configPath, "TOML config file path")
-	if err := registerFlags(flags, &cfg); err != nil {
-		return Config{}, err
-	}
-	if err := flags.Parse(args); err != nil {
+	cfg, _, err = parseCLI(args, cfg, configPath)
+	if err != nil {
 		return Config{}, err
 	}
 	normalize(&cfg)
@@ -171,205 +169,6 @@ func rejectUnknownFields(md toml.MetaData) error {
 		return nil
 	}
 	return fmt.Errorf("unknown field %q", undecoded[0].String())
-}
-
-func findConfigPath(args []string) (string, error) {
-	for index, arg := range args {
-		if arg == "-config" || arg == "--config" {
-			if index+1 >= len(args) {
-				return "", errors.New("config flag requires a value")
-			}
-			return args[index+1], nil
-		}
-		if strings.HasPrefix(arg, "-config=") {
-			return strings.TrimPrefix(arg, "-config="), nil
-		}
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config="), nil
-		}
-	}
-	return "", nil
-}
-
-func registerFlags(flags *flag.FlagSet, cfg *Config) error {
-	return registerValueFlags(flags, nil, reflect.ValueOf(cfg).Elem())
-}
-
-func registerValueFlags(flags *flag.FlagSet, prefix []string, value reflect.Value) error {
-	valueType := value.Type()
-	if valueType == reflect.TypeOf(Duration(0)) || valueType == reflect.TypeOf(utils.ByteSize(0)) || value.Kind() != reflect.Struct {
-		registerFlag(flags, strings.Join(prefix, "-"), "override "+strings.Join(prefix, "."), value)
-		return nil
-	}
-	for index := 0; index < value.NumField(); index++ {
-		field := valueType.Field(index)
-		if !field.IsExported() {
-			continue
-		}
-		name := configFieldName(field)
-		if name == "" {
-			continue
-		}
-		child := value.Field(index)
-		childPrefix := append(prefix, strings.ReplaceAll(name, "_", "-"))
-		if err := registerValueFlags(flags, childPrefix, child); err != nil {
-			return err
-		}
-		for _, alias := range splitAliases(field.Tag.Get("flag_alias")) {
-			registerFlag(flags, alias, "override "+strings.Join(childPrefix, "."), child)
-		}
-	}
-	return nil
-}
-
-func registerFlag(flags *flag.FlagSet, name, usage string, value reflect.Value) {
-	if value.Type() == reflect.TypeOf(Duration(0)) {
-		flags.Var(durationFlag{value: value}, name, usage)
-		return
-	}
-	if value.Type() == reflect.TypeOf(utils.ByteSize(0)) {
-		flags.Var(byteSizeFlag{value: value}, name, usage)
-		return
-	}
-	if value.Kind() == reflect.Slice && value.Type().Elem().Kind() == reflect.String {
-		flags.Var(stringSliceFlag{value: value}, name, usage)
-		return
-	}
-	flags.Var(scalarFlag{value: value}, name, usage)
-}
-
-func splitAliases(value string) []string {
-	aliases := []string{}
-	for _, alias := range strings.Split(value, ",") {
-		alias = strings.TrimSpace(alias)
-		if alias != "" {
-			aliases = append(aliases, alias)
-		}
-	}
-	return aliases
-}
-
-func configFieldName(field reflect.StructField) string {
-	name := strings.Split(field.Tag.Get("toml"), ",")[0]
-	if name == "-" {
-		return ""
-	}
-	if name != "" {
-		return name
-	}
-	return strings.ToLower(field.Name)
-}
-
-type byteSizeFlag struct {
-	value reflect.Value
-}
-
-func (f byteSizeFlag) String() string {
-	return strconv.FormatInt(f.value.Int(), 10)
-}
-
-func (f byteSizeFlag) Set(value string) error {
-	var size utils.ByteSize
-	if err := size.Set(value); err != nil {
-		return err
-	}
-	f.value.SetInt(size.Int64())
-	return nil
-}
-
-type stringSliceFlag struct {
-	value reflect.Value
-}
-
-func (f stringSliceFlag) String() string {
-	if f.value.Len() == 0 {
-		return ""
-	}
-	parts := make([]string, f.value.Len())
-	for index := 0; index < f.value.Len(); index++ {
-		parts[index] = f.value.Index(index).String()
-	}
-	return strings.Join(parts, ",")
-}
-
-func (f stringSliceFlag) Set(value string) error {
-	parts := splitFlagList(value)
-	slice := reflect.MakeSlice(f.value.Type(), len(parts), len(parts))
-	for index, part := range parts {
-		slice.Index(index).SetString(part)
-	}
-	f.value.Set(slice)
-	return nil
-}
-
-func splitFlagList(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	parts := []string{}
-	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			parts = append(parts, part)
-		}
-	}
-	return parts
-}
-
-type durationFlag struct {
-	value reflect.Value
-}
-
-func (f durationFlag) String() string {
-	return time.Duration(f.value.Int()).String()
-}
-
-func (f durationFlag) Set(value string) error {
-	parsed, err := time.ParseDuration(strings.TrimSpace(value))
-	if err != nil {
-		return err
-	}
-	f.value.SetInt(int64(parsed))
-	return nil
-}
-
-type scalarFlag struct {
-	value reflect.Value
-}
-
-func (f scalarFlag) String() string {
-	switch f.value.Kind() {
-	case reflect.String:
-		return f.value.String()
-	case reflect.Int, reflect.Int64:
-		return strconv.FormatInt(f.value.Int(), 10)
-	default:
-		return ""
-	}
-}
-
-func (f scalarFlag) Set(value string) error {
-	switch f.value.Kind() {
-	case reflect.String:
-		f.value.SetString(value)
-		return nil
-	case reflect.Int:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 0)
-		if err != nil {
-			return err
-		}
-		f.value.SetInt(parsed)
-		return nil
-	case reflect.Int64:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-		if err != nil {
-			return err
-		}
-		f.value.SetInt(parsed)
-		return nil
-	default:
-		return fmt.Errorf("unsupported config field type %s", f.value.Type())
-	}
 }
 
 func normalize(cfg *Config) {
