@@ -152,8 +152,56 @@ func TestQueryPayloadsFiltersAndPaginates(t *testing.T) {
 	if paged.Total != 3 {
 		t.Fatalf("paged Total = %d, want 3", paged.Total)
 	}
-	if got := []string{paged.Items[0].Hash, paged.Items[1].Hash}; got[0] != records[1].Hash || got[1] != records[2].Hash {
-		t.Fatalf("paged hashes = %v, want second and third records", got)
+	// Default sort is created desc: records[2], records[1], records[0].
+	if got := []string{paged.Items[0].Hash, paged.Items[1].Hash}; got[0] != records[1].Hash || got[1] != records[0].Hash {
+		t.Fatalf("paged hashes = %v, want middle then oldest by created desc", got)
+	}
+}
+
+func TestQueryPayloadsSortsBySizeAndCreated(t *testing.T) {
+	store, err := metadata.Open(t.TempDir() + "/metadata.db")
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	records := []metadata.Payload{
+		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 5, Status: metadata.StatusLocal, CreatedAt: timePtr(time.Unix(1, 0).UTC())},
+		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Size: 20, Status: metadata.StatusLocal, CreatedAt: timePtr(time.Unix(2, 0).UTC())},
+		{Hash: "cccccccccccccccccccccccccccccccccccccccc", Size: 10, Status: metadata.StatusLocal},
+		{Hash: "dddddddddddddddddddddddddddddddddddddddd", Size: 10, Status: metadata.StatusLocal, CreatedAt: timePtr(time.Unix(3, 0).UTC())},
+	}
+	for _, record := range records {
+		if err := store.PutPayload(record); err != nil {
+			t.Fatalf("PutPayload returned error: %v", err)
+		}
+	}
+
+	byCreated, err := store.QueryPayloads(metadata.PayloadQuery{Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryPayloads created default: %v", err)
+	}
+	if got := hashesOf(byCreated.Items); !equalStrings(got, []string{records[3].Hash, records[1].Hash, records[0].Hash, records[2].Hash}) {
+		t.Fatalf("default created desc hashes = %v", got)
+	}
+
+	bySizeAsc, err := store.QueryPayloads(metadata.PayloadQuery{SortBy: "size", SortOrder: "asc", Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryPayloads size asc: %v", err)
+	}
+	if got := hashesOf(bySizeAsc.Items); !equalStrings(got, []string{records[0].Hash, records[2].Hash, records[3].Hash, records[1].Hash}) {
+		t.Fatalf("size asc hashes = %v", got)
+	}
+
+	bySizeDescPage, err := store.QueryPayloads(metadata.PayloadQuery{SortBy: "size", SortOrder: "desc", Limit: 2, Offset: 1})
+	if err != nil {
+		t.Fatalf("QueryPayloads size desc page: %v", err)
+	}
+	if bySizeDescPage.Total != 4 {
+		t.Fatalf("size desc page Total = %d, want 4", bySizeDescPage.Total)
+	}
+	if got := hashesOf(bySizeDescPage.Items); !equalStrings(got, []string{records[3].Hash, records[2].Hash}) {
+		t.Fatalf("size desc page hashes = %v, want d then c", got)
 	}
 }
 
@@ -245,4 +293,24 @@ func TestPayloadTimeFieldsCanBeNull(t *testing.T) {
 
 func timePtr(value time.Time) *time.Time {
 	return &value
+}
+
+func hashesOf(items []metadata.Payload) []string {
+	hashes := make([]string, len(items))
+	for i, item := range items {
+		hashes[i] = item.Hash
+	}
+	return hashes
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

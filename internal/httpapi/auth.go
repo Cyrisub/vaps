@@ -63,9 +63,9 @@ func (h *Handler) authExpire(w http.ResponseWriter, r *http.Request) {
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
+		return NormalizeClientIP(r.RemoteAddr)
 	}
-	return host
+	return NormalizeClientIP(host)
 }
 
 func formatHTTPTime(unix int64) string {

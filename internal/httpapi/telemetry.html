@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VAPS Telemetry</title>
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+  <script src="/dashboard/static/dashboard.js" defer></script>
+</head>
+<body data-page="telemetry">
+  <section class="vaps-sector">
+    <h1>Telemetry</h1>
+    <p class="subtitle">HTTP request performance and related server metrics since process start.</p>
+  </section>
+
+  <section class="vaps-sector" id="http">
+    <h2>HTTP Requests</h2>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">Total</p><p class="metric-value" id="http-total">0</p></div>
+        <div class="metric-card"><p class="metric-label">Active</p><p class="metric-value" id="http-active">0</p></div>
+        <div class="metric-card"><p class="metric-label">Req/sec (1m)</p><p class="metric-value" id="http-rate-1">0.0</p></div>
+        <div class="metric-card"><p class="metric-label">Req/sec (mean)</p><p class="metric-value" id="http-rate-mean">0.0</p></div>
+        <div class="metric-card"><p class="metric-label">Uptime</p><p class="metric-value" id="http-uptime">0s</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector">
+    <h2>Latency</h2>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">Min</p><p class="metric-value" id="lat-min">-</p></div>
+        <div class="metric-card"><p class="metric-label">Avg</p><p class="metric-value" id="lat-avg">-</p></div>
+        <div class="metric-card"><p class="metric-label">Max</p><p class="metric-value" id="lat-max">-</p></div>
+        <div class="metric-card"><p class="metric-label">p50</p><p class="metric-value" id="lat-p50">-</p></div>
+        <div class="metric-card"><p class="metric-label">p95</p><p class="metric-value" id="lat-p95">-</p></div>
+        <div class="metric-card"><p class="metric-label">p99</p><p class="metric-value" id="lat-p99">-</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector">
+    <h2>Status &amp; Traffic</h2>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">OK (2xx/3xx)</p><p class="metric-value" id="status-ok">0</p></div>
+        <div class="metric-card"><p class="metric-label">Warning (4xx)</p><p class="metric-value" id="status-warn">0</p></div>
+        <div class="metric-card"><p class="metric-label">Error (5xx)</p><p class="metric-value" id="status-error">0</p></div>
+        <div class="metric-card"><p class="metric-label">Bytes In</p><p class="metric-value" id="bytes-in">0 B</p></div>
+        <div class="metric-card"><p class="metric-label">Bytes Out</p><p class="metric-value" id="bytes-out">0 B</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector" id="cache">
+    <h2>Cache</h2>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">Entries</p><p class="metric-value" id="cache-entries">0</p></div>
+        <div class="metric-card"><p class="metric-label">Used</p><p class="metric-value" id="cache-used">0 B</p></div>
+        <div class="metric-card"><p class="metric-label">Capacity</p><p class="metric-value" id="cache-max">0 B</p></div>
+        <div class="metric-card"><p class="metric-label">Hit Rate</p><p class="metric-value" id="cache-hit-rate">0.0%</p></div>
+        <div class="metric-card"><p class="metric-label">Hits</p><p class="metric-value" id="cache-hits">0</p></div>
+        <div class="metric-card"><p class="metric-label">Misses</p><p class="metric-value" id="cache-misses">0</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector">
+    <div class="vaps-sector-header">
+      <h2>Raw Snapshot</h2>
+      <span class="hint">same source as /dashboard/stats</span>
+    </div>
+    <pre id="stats">loading...</pre>
+  </section>
+
+  <script>
+    const formatBytes = (value) => {
+      const unit = 1024;
+      if (value < unit) return `${value} B`;
+      const units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+      let scaled = value / unit;
+      let index = 0;
+      while (scaled >= unit && index < units.length - 1) {
+        scaled /= unit;
+        index += 1;
+      }
+      return `${scaled.toFixed(1)} ${units[index]}`;
+    };
+    const formatDuration = (seconds) => {
+      if (seconds == null || Number(seconds) <= 0) return "-";
+      const ms = Number(seconds) * 1000;
+      if (ms < 1) return `${(ms * 1000).toFixed(0)} µs`;
+      if (ms < 1000) return `${ms.toFixed(1)} ms`;
+      return `${(ms / 1000).toFixed(2)} s`;
+    };
+    const formatUptime = (seconds) => {
+      const total = Math.max(0, Math.floor(Number(seconds) || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    };
+    const percent = (part, total) => total > 0 ? Math.max(0, Math.min(100, part * 100 / total)) : 0;
+    const text = (id, value) => { document.getElementById(id).textContent = value; };
+
+    async function loadStats() {
+      const response = await fetch("/dashboard/stats");
+      if (!response.ok) throw new Error(await response.text());
+      const stats = await response.json();
+      const http = stats.http || {};
+      const requests = http.requests || {};
+      const status = http.status || {};
+      const bytes = http.bytes || {};
+      const cache = stats.cache || {};
+      const hitRate = percent(cache.hits || 0, (cache.hits || 0) + (cache.misses || 0));
+
+      text("http-total", requests.count || 0);
+      text("http-active", requests.active || 0);
+      text("http-rate-1", Number(requests.rate_1 || 0).toFixed(2));
+      text("http-rate-mean", Number(requests.rate_mean || 0).toFixed(2));
+      text("http-uptime", formatUptime(http.uptime_s));
+      text("lat-min", formatDuration(requests.t_min));
+      text("lat-avg", formatDuration(requests.t_avg));
+      text("lat-max", formatDuration(requests.t_max));
+      text("lat-p50", formatDuration(requests.t_p50));
+      text("lat-p95", formatDuration(requests.t_p95));
+      text("lat-p99", formatDuration(requests.t_p99));
+      text("status-ok", status.ok || 0);
+      text("status-warn", status.client_error || 0);
+      text("status-error", status.server_error || 0);
+      text("bytes-in", formatBytes(bytes.in || 0));
+      text("bytes-out", formatBytes(bytes.out || 0));
+      text("cache-entries", cache.entries || 0);
+      text("cache-used", formatBytes(cache.used_bytes || 0));
+      text("cache-max", formatBytes(cache.max_bytes || 0));
+      text("cache-hit-rate", `${hitRate.toFixed(1)}%`);
+      text("cache-hits", cache.hits || 0);
+      text("cache-misses", cache.misses || 0);
+      text("stats", JSON.stringify(stats, null, 2));
+    }
+
+    loadStats().catch((error) => {
+      text("stats", `failed to load stats: ${error.message}`);
+    });
+  </script>
+</body>
+</html>

@@ -17,7 +17,9 @@ import (
 	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
+	"vaps/internal/httpmeter"
 	"vaps/internal/metadata"
+	"vaps/internal/reqlog"
 	"vaps/internal/uploadsession"
 )
 
@@ -28,6 +30,8 @@ type Handler struct {
 	backup  backup.Backend
 	auth    *auth.Store
 	uploads *uploadsession.Store
+	reqlog  *reqlog.Store
+	meter   *httpmeter.Meter
 	opts    Options
 }
 
@@ -56,8 +60,11 @@ type backupListResponse struct {
 }
 
 type dashboardStats struct {
-	Metadata metadata.Stats `json:"metadata"`
-	Cache    cache.Stats    `json:"cache"`
+	Metadata metadata.Stats  `json:"metadata"`
+	Cache    cache.Stats     `json:"cache"`
+	Auth     auth.Stats      `json:"auth"`
+	Errors   reqlog.Stats    `json:"errors"`
+	HTTP     httpmeter.Stats `json:"http"`
 }
 
 type metadataQueryResponse struct {
@@ -95,6 +102,18 @@ var dashboardHTML string
 //go:embed metadata.html
 var metadataDashboardHTML string
 
+//go:embed telemetry.html
+var telemetryDashboardHTML string
+
+//go:embed info.html
+var infoDashboardHTML string
+
+//go:embed dashboard.css
+var dashboardCSS string
+
+//go:embed dashboard.js
+var dashboardJS string
+
 func New(store *blobstore.Store) http.Handler {
 	return &Handler{store: store, opts: defaultOptions()}
 }
@@ -115,7 +134,7 @@ func NewWithMetadataCacheAndBackup(store *blobstore.Store, meta *metadata.Store,
 	return &Handler{store: store, meta: meta, cache: lru, backup: backupBackend, opts: defaultOptions()}
 }
 
-func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend, authStore *auth.Store, uploads *uploadsession.Store, opts Options) http.Handler {
+func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend, authStore *auth.Store, uploads *uploadsession.Store, opts Options) *Handler {
 	if opts.AuthExpireTime <= 0 {
 		opts.AuthExpireTime = defaultOptions().AuthExpireTime
 	}
@@ -128,6 +147,12 @@ func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backu
 	if opts.UploadCleanupInterval <= 0 {
 		opts.UploadCleanupInterval = defaultOptions().UploadCleanupInterval
 	}
+	if opts.StartedAt.IsZero() {
+		opts.StartedAt = time.Now().UTC()
+	}
+	if opts.BackupBackends == nil {
+		opts.BackupBackends = []string{}
+	}
 	return &Handler{
 		store:   store,
 		meta:    meta,
@@ -135,6 +160,8 @@ func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backu
 		backup:  backupBackend,
 		auth:    authStore,
 		uploads: uploads,
+		reqlog:  reqlog.New(10000),
+		meter:   httpmeter.New(),
 		opts:    opts,
 	}
 }
@@ -145,12 +172,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.health(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard":
 		h.dashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/static/dashboard.css":
+		h.dashboardStaticCSS(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/static/dashboard.js":
+		h.dashboardStaticJS(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/stats":
 		h.dashboardStats(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata":
 		h.metadataDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/query":
 		h.metadataQuery(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/auth":
+		h.authDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/auth/query":
+		h.authQuery(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/dashboard/auth/clear-expired":
+		h.authClearExpired(w)
+	case r.Method == http.MethodPost && r.URL.Path == "/dashboard/auth/clear-all":
+		h.authClearAll(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/errors":
+		h.errorsDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/errors/query":
+		h.errorsQuery(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/telemetry":
+		h.telemetryDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/info":
+		h.infoDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/info.json":
+		h.dashboardInfo(w)
 	case r.URL.Path == "/v2/auth/request" && r.Method == http.MethodPost:
 		h.authRequest(w, r)
 	case r.URL.Path == "/v2/auth/expire" && r.Method == http.MethodGet:
@@ -226,10 +275,28 @@ func (h *Handler) dashboard(w http.ResponseWriter) {
 	_, _ = io.WriteString(w, dashboardHTML)
 }
 
+func (h *Handler) dashboardStaticCSS(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, dashboardCSS)
+}
+
+func (h *Handler) dashboardStaticJS(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, dashboardJS)
+}
+
 func (h *Handler) metadataDashboard(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, metadataDashboardHTML)
+}
+
+func (h *Handler) telemetryDashboard(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, telemetryDashboardHTML)
 }
 
 func (h *Handler) dashboardStats(w http.ResponseWriter) {
@@ -318,6 +385,26 @@ func parseMetadataQuery(r *http.Request) (metadata.PayloadQuery, error) {
 			return metadata.PayloadQuery{}, err
 		}
 		query.Backup = &backup
+	}
+	sortBy := strings.TrimSpace(strings.ToLower(values.Get("sort")))
+	if sortBy == "" {
+		sortBy = "created"
+	}
+	switch sortBy {
+	case "created", "size":
+		query.SortBy = sortBy
+	default:
+		return metadata.PayloadQuery{}, errors.New("sort must be one of created, size")
+	}
+	sortOrder := strings.TrimSpace(strings.ToLower(values.Get("order")))
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+	switch sortOrder {
+	case "asc", "desc":
+		query.SortOrder = sortOrder
+	default:
+		return metadata.PayloadQuery{}, errors.New("order must be one of asc, desc")
 	}
 	return query, nil
 }
@@ -858,5 +945,18 @@ func (h *Handler) collectDashboardStats() (dashboardStats, error) {
 		stats.Metadata = metadataStats
 	}
 	stats.Cache = h.cache.Stats()
+	if h.auth != nil {
+		authStats, err := h.auth.Stats()
+		if err != nil {
+			return dashboardStats{}, err
+		}
+		stats.Auth = authStats
+	}
+	if h.reqlog != nil {
+		stats.Errors = h.reqlog.Stats()
+	}
+	if h.meter != nil {
+		stats.HTTP = h.meter.Stats()
+	}
 	return stats, nil
 }

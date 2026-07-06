@@ -23,7 +23,7 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 }
 
-func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request, refresh bool) (string, bool) {
+func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if h.auth == nil {
 		http.Error(w, "auth is not configured", http.StatusServiceUnavailable)
 		return "", false
@@ -37,11 +37,9 @@ func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request, refresh bo
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return "", false
 	}
-	if refresh {
-		if _, err := h.auth.Refresh(token); err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return "", false
-		}
+	if _, err := h.auth.Refresh(token); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return "", false
 	}
 	return token, true
 }

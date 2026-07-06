@@ -59,8 +59,8 @@ func TestDashboardMetadataReturnsHTML(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte("Metadata Browser")) {
-		t.Fatalf("metadata dashboard body does not contain title: %q", response.Body.String())
+	if !bytes.Contains(response.Body.Bytes(), []byte("Payloads")) {
+		t.Fatalf("payloads dashboard body does not contain title: %q", response.Body.String())
 	}
 }
 
@@ -126,7 +126,7 @@ func TestV2DirectPushPullAndRange(t *testing.T) {
 
 func TestV2MetadataExistsAndVCS(t *testing.T) {
 	meta := openMetadata(t)
-	handler := newV2Handler(t, meta, nil, nil)
+	handler, _ := newV2HandlerWithAuth(t, meta, nil, nil)
 	token := requestToken(t, handler)
 	payload := []byte("meta")
 	hash := ioHash(payload)
@@ -169,6 +169,33 @@ func TestV2MetadataExistsAndVCS(t *testing.T) {
 	}
 }
 
+func TestV2MetadataExistsRefreshesAuthExpiry(t *testing.T) {
+	handler, authStore := newV2HandlerWithAuth(t, openMetadata(t), nil, nil)
+	token := requestToken(t, handler)
+
+	before, err := authStore.Validate(token)
+	if err != nil {
+		t.Fatalf("validate before exists: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	existsPost := httptest.NewRecorder()
+	existsReq := httptest.NewRequest(http.MethodPost, "/v2/metadata/exists", strings.NewReader(`{"hashes":["`+ioHash([]byte("missing"))+`"]}`))
+	existsReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(existsPost, existsReq)
+	if existsPost.Code != http.StatusOK {
+		t.Fatalf("exists status = %d, want %d; body=%q", existsPost.Code, http.StatusOK, existsPost.Body.String())
+	}
+
+	after, err := authStore.Validate(token)
+	if err != nil {
+		t.Fatalf("validate after exists: %v", err)
+	}
+	if !after.ExpiresAt.After(before.ExpiresAt) {
+		t.Fatalf("expires_at after exists = %s, want after %s", after.ExpiresAt, before.ExpiresAt)
+	}
+}
+
 func TestV2TusUploadCompletes(t *testing.T) {
 	handler := newV2Handler(t, openMetadata(t), nil, nil)
 	token := requestToken(t, handler)
@@ -199,6 +226,12 @@ func TestV2TusUploadCompletes(t *testing.T) {
 
 func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) http.Handler {
 	t.Helper()
+	handler, _ := newV2HandlerWithAuth(t, meta, lru, backupBackend)
+	return handler
+}
+
+func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) (http.Handler, *auth.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	authStore, err := auth.Open(filepath.Join(dir, "auth.db"), time.Minute)
 	if err != nil {
@@ -210,12 +243,28 @@ func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBa
 		t.Fatalf("open uploads: %v", err)
 	}
 	t.Cleanup(func() { _ = uploads.Close() })
-	return httpapi.NewV2(blobstore.New(dir), meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+	handler := httpapi.NewV2(blobstore.New(dir), meta, lru, backupBackend, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        time.Minute,
 		UploadDirectMaxBytes:  8 * 1024 * 1024,
 		UploadExpiration:      time.Hour,
 		UploadCleanupInterval: time.Minute,
-	})
+		ListenAddr:            "127.0.0.1:8588",
+		DataDir:               dir,
+		MetadataDB:            filepath.Join(dir, "metadata.db"),
+		AuthDB:                filepath.Join(dir, "auth.db"),
+		UploadDB:              filepath.Join(dir, "uploads.db"),
+		UploadDir:             filepath.Join(dir, "uploads"),
+		LogDir:                filepath.Join(dir, "logs"),
+		LogRetentionDays:      7,
+		StatusLogInterval:     time.Minute,
+		CacheBytes:            64 * 1024 * 1024,
+		CacheMaxObjectBytes:   8 * 1024 * 1024,
+		BackupBackends:        []string{"none"},
+		BackupFlushInterval:   time.Minute,
+		BackupMaxPending:      32,
+		StartedAt:             time.Now().UTC().Add(-time.Second),
+	}).HTTPHandler()
+	return handler, authStore
 }
 
 func requestToken(t *testing.T, handler http.Handler) string {

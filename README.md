@@ -171,7 +171,8 @@ Payload objects are identified with the `iohash` query parameter. An `iohash` is
 
 - `POST /v2/auth/request`
 
-  Request a bearer token. No auth required.
+  Request a bearer token. No auth required. If an active token already exists for
+  the same `client_id` and client IP, that token is reused and its idle expiry is refreshed.
 
   Request:
 
@@ -185,11 +186,17 @@ Payload objects are identified with the `iohash` query parameter. An `iohash` is
   {"token":"<token>","expires_at":"2026-07-04T15:16:00Z"}
   ```
 
-  `expires_at` uses a sliding idle window configured by `auth.expire_time`. Successful `/v2/payload/pull` and `/v2/payload/push` requests refresh the expiry time.
+  `expires_at` uses a sliding idle window configured by `auth.expire_time`. Any successful
+  `Authorization: Bearer <token>` check refreshes the expiry time.
 
 - `GET /v2/auth/expire?token=<token>`
 
   Immediately revoke a token. No auth header required.
+
+Dashboard auth cleanup (HTML Auth Browser):
+
+- `POST /dashboard/auth/clear-expired` deletes expired tokens from the auth database.
+- `POST /dashboard/auth/clear-all` deletes every stored auth token.
 
 ### Pull
 
@@ -239,7 +246,7 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 
 - `POST /v2/metadata/exists`
 
-  Requires bearer token. Batch payload existence check. Does not refresh token idle expiry.
+  Requires bearer token. Batch payload existence check. Successful auth refreshes token idle expiry.
 
 - `POST /v2/metadata`
 
@@ -267,6 +274,14 @@ When built with `-tags vaps_legacy_v1`, the server also exposes:
 - `GET /dashboard`
 
   Returns a read-only HTML dashboard with server statistics.
+
+- `GET /dashboard/info`
+
+  Returns a read-only HTML page with process, runtime, and configuration summary.
+
+- `GET /dashboard/info.json`
+
+  Returns the same server info as JSON (version/channel, uptime, GOOS/GOARCH, paths, non-secret config).
 
 - `GET /dashboard/stats`
 

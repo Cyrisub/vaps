@@ -28,19 +28,84 @@ Daily test automation lives in `.github/workflows/test.yml`.
 
 Release automation lives in `.github/workflows/release.yml` and `.github/workflows/release-cleanup.yml`. Do not change release behavior without updating this section and the workflows together.
 
+This repo uses **Jujutsu (`jj`)**, not a colocated Git working tree. Do not use raw `git tag` / `git push` from the project directory unless you have exported through `jj git export` first.
+
+### Agent checklist (before every release)
+
+Do not push, tag, or trigger a release until all of the following are done:
+
+1. **Confirm with the user**
+   - Tag / version (for example `v0.0.1-alpha`)
+   - Target branch bookmark (for example `dev` for pre-release, `main` for formal release)
+   - Whether this is a **new tag** or **republishing an existing tag**
+
+2. **Finish changes and leave the workspace clear**
+   - Every intended edit must be saved in a described change (`jj describe -m "..."`).
+   - After describing, `@` should be an **empty change** with no file modifications and no description. Verify with `jj --no-pager status`.
+   - If multiple fixup changes should ship as one release, squash them onto the target branch parent before tagging (see below).
+   - The tagged revision must be the commit that contains all release content; move the branch bookmark to it before pushing.
+
+3. **Run tests locally and confirm they pass**
+   ```sh
+   make test
+   make test-functional
+   ```
+   CI runs the same targets. Do not release if either fails. On Windows, run the equivalent `go test` commands if `make` is unavailable, but prefer a Linux-like environment when functional tests matter.
+
+4. **Review what will ship**
+   ```sh
+   jj --no-pager log -r '<branch-bookmark>' -n 5
+   jj --no-pager bookmark list
+   jj --no-pager tag list
+   ```
+   Restate tag, branch, and top commit message to the user immediately before pushing.
+
+Only proceed with push/tag steps after explicit user approval of the version and branch.
+
+### Jujutsu release workflow
+
+Typical flow for publishing (or republishing) from `dev`:
+
+```sh
+# 1. Point the branch bookmark at the release commit
+jj bookmark set dev -r '@'          # or: jj bookmark set dev -r '<change-id>'
+
+# 2. Create or move the release tag
+jj tag set v0.0.1-alpha -r dev --allow-move
+
+# 3. Push the branch
+jj git push --remote origin --bookmark dev
+
+# 4. Export jj state to the backing Git repo and push the tag
+jj git export
+cd .jj/repo/store/git
+git push --force origin refs/tags/v0.0.1-alpha
+```
+
+Notes:
+
+- Use `--allow-move` when republishing an existing tag to a new commit.
+- `--force` on the tag push is required when moving a tag; pre-releases and drafts are designed to be replaced this way.
+- Remote name is `origin` (`https://github.com/Cyrisub/vaps.git`). There is also an `internal` remote; do not push releases there unless the user asks.
+- After `jj describe`, the described change becomes immutable and `jj` opens a new empty `@` on top. That empty `@` is the expected “clear workspace” state.
+- To squash fixups into one release commit before tagging:
+  ```sh
+  jj squash --into dev
+  jj describe -m "feat: ..."   # rewrite the squashed change message if needed
+  ```
+
+### What happens after push
+
+- Pushing `dev` triggers the **Test** workflow on that commit.
+- Pushing the tag triggers the **Release** workflow, which waits for a successful **Test** run on the **same commit**, then builds and publishes GitHub release assets.
+- Monitor: https://github.com/Cyrisub/vaps/actions
+
 ### Trigger
 
-- Push a SemVer tag to GitHub, for example `v1.0.0` or `v1.0.0-beta.1`.
+- Push a SemVer tag to GitHub, for example `v1.0.0` or `v1.0.0-alpha.1`.
 - Tag format: `vMAJOR.MINOR.PATCH`, with optional `-prerelease` and `+build` suffixes.
 - The workflow validates the tag, waits for a successful `Test` workflow run on the tagged commit, then publishes a GitHub release.
 - Delete a release SemVer tag on GitHub and `release-cleanup.yml` deletes the matching GitHub release entry if one exists. Non-release tags are ignored. GitHub does not emit `delete` events when more than three tags are deleted in one operation.
-
-Example:
-
-```sh
-git tag v1.0.0
-git push origin v1.0.0
-```
 
 Only push tags when the user explicitly asks.
 
@@ -91,7 +156,7 @@ Naming:
 Packaging rules:
 
 - Upload binary archives only; do not include source trees in custom release assets.
-- Each archive contains a single compiled `vaps` binary.
+- Each archive contains the `vaps` binary plus bundled helper scripts, default `config.toml`, and `vaps-install.conf`.
 
 GitHub limitation:
 

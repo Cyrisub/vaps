@@ -72,12 +72,27 @@ func Start(t *testing.T, opts Options) *Server {
 		t.Fatalf("open uploads: %v", err)
 	}
 
-	handler := httpapi.AccessLog(httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+	handler := httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        30 * time.Minute,
 		UploadDirectMaxBytes:  8 * 1024 * 1024,
 		UploadExpiration:      24 * time.Hour,
 		UploadCleanupInterval: time.Minute,
-	}))
+		ListenAddr:            "127.0.0.1:0",
+		DataDir:               dataDir,
+		MetadataDB:            filepath.Join(dataDir, "metadata.db"),
+		AuthDB:                filepath.Join(dataDir, "auth.db"),
+		UploadDB:              filepath.Join(dataDir, "uploads.db"),
+		UploadDir:             uploadsDir,
+		LogDir:                filepath.Join(dataDir, "logs"),
+		LogRetentionDays:      7,
+		StatusLogInterval:     time.Minute,
+		CacheBytes:            64 * 1024 * 1024,
+		CacheMaxObjectBytes:   8 * 1024 * 1024,
+		BackupBackends:        []string{},
+		BackupFlushInterval:   time.Minute,
+		BackupMaxPending:      32,
+		StartedAt:             time.Now().UTC(),
+	}).HTTPHandler()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

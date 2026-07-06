@@ -20,9 +20,9 @@ import (
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
-	"vaps/internal/utils"
 	"vaps/internal/metadata"
 	"vaps/internal/uploadsession"
+	"vaps/internal/utils"
 )
 
 func main() {
@@ -83,12 +83,28 @@ func run() int {
 	}
 	defer uploads.Close()
 	startUploadCleanup(ctx, uploads, time.Duration(cfg.Upload.CleanupInterval))
-	handler := httpapi.AccessLog(httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+	startedAt := time.Now().UTC()
+	handler := httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        time.Duration(cfg.Auth.ExpireTime),
 		UploadDirectMaxBytes:  cfg.Upload.DirectMaxBytes.Int64(),
 		UploadExpiration:      time.Duration(cfg.Upload.Expiration),
 		UploadCleanupInterval: time.Duration(cfg.Upload.CleanupInterval),
-	}))
+		ListenAddr:            cfg.Addr,
+		DataDir:               cfg.DataDir,
+		MetadataDB:            cfg.MetadataDB,
+		AuthDB:                cfg.AuthDB,
+		UploadDB:              cfg.UploadDB,
+		UploadDir:             cfg.Upload.Dir,
+		LogDir:                cfg.LogDir,
+		LogRetentionDays:      cfg.LogRetentionDays,
+		StatusLogInterval:     time.Duration(cfg.StatusLogInterval),
+		CacheBytes:            cfg.Cache.Bytes.Int64(),
+		CacheMaxObjectBytes:   cfg.Cache.MaxObjectBytes.Int64(),
+		BackupBackends:        appconfig.EnabledBackupBackends(cfg.Backup.Backend),
+		BackupFlushInterval:   time.Duration(cfg.Backup.FlushInterval),
+		BackupMaxPending:      cfg.Backup.MaxPending,
+		StartedAt:             startedAt,
+	}).HTTPHandler()
 	startStatusLogger(ctx, time.Duration(cfg.StatusLogInterval), meta, lru)
 
 	server := &http.Server{

@@ -12,7 +12,7 @@ import (
 )
 
 func (h *Handler) pullPayload(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireAuth(w, r, true); !ok {
+	if _, ok := h.requireAuth(w, r); !ok {
 		return
 	}
 	switch r.Method {

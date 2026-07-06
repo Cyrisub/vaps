@@ -3,181 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VAPS Metadata Browser</title>
+  <title>VAPS Payloads</title>
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+  <script src="/dashboard/static/dashboard.js" defer></script>
   <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0b1020;
-      --panel: rgba(20, 28, 52, 0.84);
-      --panel-border: rgba(148, 163, 184, 0.18);
-      --text: #e5edf7;
-      --muted: #94a3b8;
-      --accent: #38bdf8;
-      --accent-2: #22c55e;
-      --danger: #f87171;
-      --shadow: 0 18px 55px rgba(0, 0, 0, 0.35);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: Inter, "Segoe UI Variable", "Segoe UI", Roboto, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      font-weight: 400;
-      color: var(--text);
-      background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.20), transparent 34rem),
-        radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 30rem),
-        var(--bg);
-    }
-    main {
-      width: min(1280px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 40px 0;
-    }
-    .hero {
-      display: flex;
-      justify-content: space-between;
-      gap: 24px;
-      align-items: flex-end;
-      margin-bottom: 24px;
-    }
-    .eyebrow {
-      color: var(--accent);
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.16em;
-      text-transform: uppercase;
-    }
-    h1 {
-      margin: 8px 0;
-      font-size: clamp(32px, 5vw, 52px);
-      font-weight: 600;
-      line-height: 1;
-    }
-    a { color: var(--accent); }
-    .subtitle, .hint, label {
-      color: var(--muted);
-    }
-    .subtitle {
-      margin: 0;
-      font-size: 16px;
-    }
-    .panel {
-      border: 1px solid var(--panel-border);
-      border-radius: 22px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(18px);
-      padding: 24px;
-      margin-top: 16px;
-    }
     form {
       display: grid;
-      grid-template-columns: 2fr repeat(5, minmax(120px, 1fr));
-      gap: 14px;
+      grid-template-columns: 2fr repeat(5, minmax(120px, 1fr)) auto;
+      gap: 12px;
       align-items: end;
     }
-    label {
-      display: grid;
-      gap: 6px;
-      font-size: 13px;
-      font-weight: 500;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-    input, select, button {
-      width: 100%;
-      border: 1px solid rgba(148, 163, 184, 0.22);
-      border-radius: 12px;
-      padding: 10px 12px;
-      color: var(--text);
-      background: rgba(2, 6, 23, 0.72);
-      font: inherit;
-    }
-    button {
+    table { min-width: 980px; }
+    th.sortable {
       cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    th.sortable:hover { color: var(--theme_p0); }
+    th.sortable .sort-indicator {
+      margin-left: 4px;
+      color: var(--theme_ln);
       font-weight: 600;
-      background: linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(34, 197, 94, 0.30));
     }
-    .toolbar {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-    .pager {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-    .pager button {
-      min-width: 90px;
-    }
-    .error {
-      color: var(--danger);
-      white-space: pre-wrap;
-    }
-    .table-wrap {
-      overflow: auto;
-      border-radius: 16px;
-      border: 1px solid rgba(148, 163, 184, 0.14);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 980px;
-    }
-    th, td {
-      padding: 12px 14px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-      text-align: left;
-      vertical-align: top;
-    }
-    th {
-      color: var(--muted);
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    td {
-      font-variant-numeric: tabular-nums;
-    }
-    code {
-      color: #dbeafe;
-      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-      word-break: break-all;
-    }
-    .pill {
-      display: inline-block;
-      margin: 0 6px 6px 0;
-      border-radius: 999px;
-      padding: 4px 8px;
-      color: #dbeafe;
-      background: rgba(56, 189, 248, 0.14);
-      border: 1px solid rgba(56, 189, 248, 0.24);
-      font-size: 12px;
-    }
+    th.sortable:not(.sorted) .sort-indicator { visibility: hidden; }
     @media (max-width: 960px) {
-      .hero, .toolbar { display: block; }
       form { grid-template-columns: 1fr; }
-      .pager { margin-top: 12px; }
-      main { padding: 28px 0; }
     }
   </style>
 </head>
-<body>
-  <main>
-    <section class="hero">
-      <div>
-        <div class="eyebrow">Virtual Asset Payload Storage</div>
-        <h1>Metadata Browser</h1>
-        <p class="subtitle">Read-only query view over the bbolt metadata database.</p>
-      </div>
-      <a href="/dashboard">Back to Dashboard</a>
-    </section>
+<body data-page="metadata">
+  <section class="vaps-sector">
+    <h1>Payloads</h1>
+    <p class="subtitle">Read-only query view over payload metadata records.</p>
+  </section>
 
-    <section class="panel">
+  <section class="vaps-sector">
+    <h2>Filters</h2>
+    <div class="panel">
       <form id="filters">
         <label>
           Hash contains
@@ -214,11 +76,14 @@
         </label>
         <button type="submit">Search</button>
       </form>
-    </section>
+    </div>
+  </section>
 
-    <section class="panel">
+  <section class="vaps-sector">
+    <h2>Results</h2>
+    <div class="panel">
       <div class="toolbar">
-      <p class="hint" id="summary">Loading metadata records...</p>
+        <p class="hint" id="summary">Loading payload records...</p>
         <div class="pager">
           <button id="prev" type="button">Previous</button>
           <button id="next" type="button">Next</button>
@@ -230,22 +95,26 @@
           <thead>
             <tr>
               <th>Hash</th>
-              <th>Size</th>
+              <th class="sortable" data-sort="size" id="sort-size" title="Sort by size" aria-sort="none">
+                Size<span class="sort-indicator" aria-hidden="true"></span>
+              </th>
               <th>Status</th>
               <th>Backup</th>
               <th>Backuped</th>
-              <th>Created</th>
+              <th class="sortable sorted" data-sort="created" id="sort-created" title="Sort by created time" aria-sort="descending">
+                Created<span class="sort-indicator" aria-hidden="true">↓</span>
+              </th>
               <th>VCS</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
-    </section>
-  </main>
+    </div>
+  </section>
 
   <script>
-    const state = { offset: 0 };
+    const state = { offset: 0, sort: "created", order: "desc" };
     const form = document.getElementById("filters");
     const rows = document.getElementById("rows");
     const summary = document.getElementById("summary");
@@ -283,18 +152,31 @@
         .join("") || '<span class="hint">none</span>';
     };
 
+    function updateSortHeaders() {
+      for (const header of document.querySelectorAll("th.sortable")) {
+        const active = header.dataset.sort === state.sort;
+        const indicator = header.querySelector(".sort-indicator");
+        header.classList.toggle("sorted", active);
+        header.setAttribute("aria-sort", active ? (state.order === "asc" ? "ascending" : "descending") : "none");
+        indicator.textContent = active ? (state.order === "asc" ? "↑" : "↓") : "";
+      }
+    }
+
     function buildParams() {
       const params = new URLSearchParams();
       for (const id of ["q", "status", "backup", "min_size", "max_size", "limit"]) {
         const current = value(id);
         if (current) params.set(id, current);
       }
+      params.set("sort", state.sort);
+      params.set("order", state.order);
       params.set("offset", String(state.offset));
       return params;
     }
 
     async function load() {
       error.textContent = "";
+      updateSortHeaders();
       const response = await fetch(`/dashboard/metadata/query?${buildParams()}`);
       if (!response.ok) throw new Error(await response.text());
       const data = await response.json();
@@ -316,7 +198,7 @@
         </tr>
       `).join("");
       if (items.length === 0) {
-        rows.innerHTML = '<tr><td colspan="7" class="hint">No metadata records matched the query.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="7" class="hint">No payload records matched the query.</td></tr>';
       }
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;
@@ -340,7 +222,21 @@
       state.offset += limit;
       load().catch((err) => { error.textContent = err.message; });
     });
+    for (const header of document.querySelectorAll("th.sortable")) {
+      header.addEventListener("click", () => {
+        const nextSort = header.dataset.sort;
+        if (state.sort === nextSort) {
+          state.order = state.order === "asc" ? "desc" : "asc";
+        } else {
+          state.sort = nextSort;
+          state.order = "desc";
+        }
+        state.offset = 0;
+        load().catch((err) => { error.textContent = err.message; });
+      });
+    }
 
+    updateSortHeaders();
     load().catch((err) => { error.textContent = err.message; });
   </script>
 </body>

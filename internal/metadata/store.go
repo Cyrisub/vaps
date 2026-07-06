@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -95,6 +96,8 @@ type PayloadQuery struct {
 	Backup       *bool
 	MinSize      *int64
 	MaxSize      *int64
+	SortBy       string
+	SortOrder    string
 	Limit        int
 	Offset       int
 }
@@ -184,7 +187,9 @@ func (s *Store) QueryPayloads(query PayloadQuery) (PayloadQueryResult, error) {
 	if query.Offset < 0 {
 		query.Offset = 0
 	}
+	sortBy, sortOrder := normalizePayloadSort(query.SortBy, query.SortOrder)
 	result := PayloadQueryResult{Limit: query.Limit, Offset: query.Offset}
+	matched := make([]Payload, 0)
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(payloadBucket))
 		return bucket.ForEach(func(_, value []byte) error {
@@ -195,21 +200,75 @@ func (s *Store) QueryPayloads(query PayloadQuery) (PayloadQueryResult, error) {
 			if !query.matches(payload) {
 				return nil
 			}
-			result.Total++
-			if int(result.Total) <= query.Offset {
-				return nil
-			}
-			if query.Limit > 0 && len(result.Items) >= query.Limit {
-				return nil
-			}
-			result.Items = append(result.Items, payload)
+			matched = append(matched, payload)
 			return nil
 		})
 	})
 	if err != nil {
 		return PayloadQueryResult{}, err
 	}
+	sortPayloads(matched, sortBy, sortOrder)
+	result.Total = int64(len(matched))
+	if query.Offset >= len(matched) {
+		return result, nil
+	}
+	end := len(matched)
+	if query.Limit > 0 && query.Offset+query.Limit < end {
+		end = query.Offset + query.Limit
+	}
+	result.Items = matched[query.Offset:end]
 	return result, nil
+}
+
+func normalizePayloadSort(sortBy, sortOrder string) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "size":
+		sortBy = "size"
+	default:
+		sortBy = "created"
+	}
+	switch strings.ToLower(strings.TrimSpace(sortOrder)) {
+	case "asc":
+		sortOrder = "asc"
+	default:
+		sortOrder = "desc"
+	}
+	return sortBy, sortOrder
+}
+
+func sortPayloads(items []Payload, sortBy, sortOrder string) {
+	desc := sortOrder != "asc"
+	sort.SliceStable(items, func(i, j int) bool {
+		switch sortBy {
+		case "size":
+			if items[i].Size != items[j].Size {
+				if desc {
+					return items[i].Size > items[j].Size
+				}
+				return items[i].Size < items[j].Size
+			}
+		default:
+			tiNil := items[i].CreatedAt == nil
+			tjNil := items[j].CreatedAt == nil
+			if tiNil != tjNil {
+				return tjNil // nils last
+			}
+			if !tiNil {
+				ti := items[i].CreatedAt.UnixNano()
+				tj := items[j].CreatedAt.UnixNano()
+				if ti != tj {
+					if desc {
+						return ti > tj
+					}
+					return ti < tj
+				}
+			}
+		}
+		if desc {
+			return items[i].Hash > items[j].Hash
+		}
+		return items[i].Hash < items[j].Hash
+	})
 }
 
 func (s *Store) init() error {

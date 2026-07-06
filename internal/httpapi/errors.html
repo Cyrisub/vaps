@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VAPS Error Log</title>
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+  <script src="/dashboard/static/dashboard.js" defer></script>
+  <style>
+    form {
+      display: grid;
+      grid-template-columns: 2fr 2fr repeat(3, minmax(100px, 1fr)) auto auto;
+      gap: 12px;
+      align-items: end;
+    }
+    table { min-width: 1200px; }
+    @media (max-width: 1100px) {
+      form { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body data-page="errors">
+  <section class="vaps-sector">
+    <h1>Error Log</h1>
+    <p class="subtitle">Recent failed requests collected in memory since server startup.</p>
+  </section>
+
+  <section class="vaps-sector">
+    <h2>Filters</h2>
+    <div class="panel">
+      <form id="filters">
+        <label>
+          Path contains
+          <input id="path" name="path" autocomplete="off" placeholder="/v2/payload">
+        </label>
+        <label>
+          Token hash
+          <input id="token_hash" name="token_hash" autocomplete="off" placeholder="full token hash">
+        </label>
+        <label>
+          Min status
+          <input id="min_status" name="min_status" type="number" min="400" max="599" placeholder="400">
+        </label>
+        <label>
+          Max status
+          <input id="max_status" name="max_status" type="number" min="400" max="599" placeholder="599">
+        </label>
+        <label>
+          Limit
+          <input id="limit" name="limit" type="number" min="1" max="500" value="100" inputmode="numeric">
+        </label>
+        <label class="checkbox-label">
+          <input id="include_dashboard" name="include_dashboard" type="checkbox">
+          Show dashboard errors
+        </label>
+        <button type="submit">Search</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="vaps-sector">
+    <h2>Results</h2>
+    <div class="panel">
+      <div class="toolbar">
+        <p class="hint" id="summary">Loading error records...</p>
+        <div class="pager">
+          <button id="prev" type="button">Previous</button>
+          <button id="next" type="button">Next</button>
+        </div>
+      </div>
+      <p class="error" id="error"></p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Method</th>
+              <th>Path</th>
+              <th>Message</th>
+              <th>Client</th>
+              <th>Token</th>
+              <th>Remote IP</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const state = { offset: 0 };
+    const form = document.getElementById("filters");
+    const rows = document.getElementById("rows");
+    const summary = document.getElementById("summary");
+    const error = document.getElementById("error");
+    const value = (id) => document.getElementById(id).value.trim();
+    const escapeText = (text) => {
+      const span = document.createElement("span");
+      span.textContent = text;
+      return span.innerHTML;
+    };
+    const formatDateTime = (value) => {
+      if (!value) return "";
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(value));
+    };
+    const statusClass = (status) => status >= 500 ? "status-5xx" : "status-4xx";
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("token_hash")) {
+      document.getElementById("token_hash").value = params.get("token_hash");
+    }
+
+    function buildParams() {
+      const query = new URLSearchParams();
+      for (const id of ["path", "token_hash", "min_status", "max_status", "limit"]) {
+        const current = value(id);
+        if (current) query.set(id, current);
+      }
+      if (document.getElementById("include_dashboard").checked) {
+        query.set("include_dashboard", "1");
+      }
+      query.set("offset", String(state.offset));
+      return query;
+    }
+
+    async function load() {
+      error.textContent = "";
+      const response = await fetch(`/dashboard/errors/query?${buildParams()}`);
+      if (!response.ok) throw new Error(await response.text());
+      render(await response.json());
+    }
+
+    function render(data) {
+      const items = data.items || [];
+      const limit = data.limit || Number(value("limit")) || 100;
+      rows.innerHTML = items.map((item) => `
+        <tr>
+          <td>${escapeText(formatDateTime(item.at))}</td>
+          <td class="${statusClass(item.status)}">${escapeText(String(item.status))}</td>
+          <td>${escapeText(item.method || "")}</td>
+          <td><code>${escapeText(item.path || "")}</code></td>
+          <td class="message">${escapeText(item.message || "")}</td>
+          <td>${escapeText(item.client_id || "")}</td>
+          <td>${item.hash_prefix ? `<code>${escapeText(item.hash_prefix)}</code>` : '<span class="hint">none</span>'}</td>
+          <td>${escapeText(item.remote_ip || "")}</td>
+        </tr>
+      `).join("");
+      if (items.length === 0) {
+        rows.innerHTML = '<tr><td colspan="8" class="hint">No failed requests matched the query.</td></tr>';
+      }
+      const start = data.total === 0 ? 0 : data.offset + 1;
+      const end = data.offset + items.length;
+      summary.textContent = `Showing ${start}-${end} of ${data.total} errors`;
+      document.getElementById("prev").disabled = data.offset <= 0;
+      document.getElementById("next").disabled = data.offset + limit >= data.total;
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.offset = 0;
+      load().catch((err) => { error.textContent = err.message; });
+    });
+    document.getElementById("prev").addEventListener("click", () => {
+      const limit = Number(value("limit")) || 100;
+      state.offset = Math.max(0, state.offset - limit);
+      load().catch((err) => { error.textContent = err.message; });
+    });
+    document.getElementById("next").addEventListener("click", () => {
+      const limit = Number(value("limit")) || 100;
+      state.offset += limit;
+      load().catch((err) => { error.textContent = err.message; });
+    });
+
+    load().catch((err) => { error.textContent = err.message; });
+  </script>
+</body>
+</html>

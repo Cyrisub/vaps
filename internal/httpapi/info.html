@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VAPS Info</title>
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+  <script src="/dashboard/static/dashboard.js" defer></script>
+</head>
+<body data-page="info">
+  <section class="vaps-sector">
+    <h1>Server Info</h1>
+    <p class="subtitle">Process, runtime environment, and configuration summary.</p>
+  </section>
+
+  <section class="vaps-sector">
+    <div class="info-tiles" id="info-tiles">
+      <div class="card info-tile">
+        <div class="card-title">Application</div>
+        <div class="info-props" id="tile-application"></div>
+      </div>
+      <div class="card info-tile">
+        <div class="card-title">System</div>
+        <div class="info-props" id="tile-system"></div>
+      </div>
+      <div class="card info-tile">
+        <div class="card-title">Runtime Configuration</div>
+        <div class="info-props" id="tile-config"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector">
+    <div class="vaps-sector-header">
+      <h2>Raw Snapshot</h2>
+      <span class="hint">GET /dashboard/info.json</span>
+    </div>
+    <pre id="raw">loading...</pre>
+  </section>
+
+  <script>
+    const formatBytes = (value) => {
+      const n = Number(value) || 0;
+      const unit = 1024;
+      if (n < unit) return n + " B";
+      const units = ["KB", "MB", "GB", "TB"];
+      let v = n;
+      let i = -1;
+      do { v /= unit; i++; } while (v >= unit && i < units.length - 1);
+      return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + " " + units[i];
+    };
+
+    const formatUptime = (seconds) => {
+      const s = Math.max(0, Math.floor(Number(seconds) || 0));
+      const days = Math.floor(s / 86400);
+      const hours = Math.floor((s % 86400) / 3600);
+      const minutes = Math.floor((s % 3600) / 60);
+      const secs = s % 60;
+      if (days > 0) return days + "d " + hours + "h " + minutes + "m";
+      if (hours > 0) return hours + "h " + minutes + "m";
+      if (minutes > 0) return minutes + "m " + secs + "s";
+      return secs + "s";
+    };
+
+    const prop = (label, value) => {
+      const row = document.createElement("div");
+      row.className = "info-prop";
+      const lab = document.createElement("div");
+      lab.className = "info-prop-label";
+      lab.textContent = label;
+      const val = document.createElement("div");
+      val.className = "info-prop-value";
+      val.textContent = value == null || value === "" ? "-" : String(value);
+      row.appendChild(lab);
+      row.appendChild(val);
+      return row;
+    };
+
+    const fill = (id, rows) => {
+      const el = document.getElementById(id);
+      el.replaceChildren();
+      rows.forEach(([label, value]) => el.appendChild(prop(label, value)));
+    };
+
+    const render = (info) => {
+      const started = info.started_at ? new Date(info.started_at) : null;
+      fill("tile-application", [
+        ["version", info.version],
+        ["channel", info.channel],
+        ["listen", info.listen && info.listen.addr],
+        ["pid", info.process && info.process.pid],
+        ["started", started && !isNaN(started.getTime()) ? started.toLocaleString() : "-"],
+        ["uptime", formatUptime(info.uptime_s)],
+        ["executable", info.process && info.process.executable],
+        ["data dir", info.paths && info.paths.data_dir],
+        ["log dir", info.paths && info.paths.log_dir],
+        ["metadata db", info.paths && info.paths.metadata_db],
+        ["auth db", info.paths && info.paths.auth_db],
+        ["upload db", info.paths && info.paths.upload_db],
+        ["upload dir", info.paths && info.paths.upload_dir],
+      ]);
+
+      fill("tile-system", [
+        ["hostname", info.process && info.process.hostname],
+        ["os", info.runtime && info.runtime.goos],
+        ["arch", info.runtime && info.runtime.goarch],
+        ["go version", info.runtime && info.runtime.go_version],
+        ["compiler", info.runtime && info.runtime.compiler],
+        ["cpus", info.runtime && info.runtime.num_cpu],
+        ["heap alloc", info.memory ? formatBytes(info.memory.alloc) : "-"],
+        ["mem sys", info.memory ? formatBytes(info.memory.sys) : "-"],
+      ]);
+
+      const cfg = info.config || {};
+      const backends = Array.isArray(cfg.backup_backends) && cfg.backup_backends.length
+        ? cfg.backup_backends.join(", ")
+        : "none";
+      fill("tile-config", [
+        ["cache bytes", formatBytes(cfg.cache_bytes)],
+        ["cache max object", formatBytes(cfg.cache_max_object_bytes)],
+        ["auth expire", cfg.auth_expire_time],
+        ["upload direct max", formatBytes(cfg.upload_direct_max_bytes)],
+        ["upload expiration", cfg.upload_expiration],
+        ["upload cleanup", cfg.upload_cleanup_interval],
+        ["status log interval", cfg.status_log_interval],
+        ["log retention days", cfg.log_retention_days],
+        ["backup backends", backends],
+        ["backup flush", cfg.backup_flush_interval],
+        ["backup max pending", cfg.backup_max_pending],
+      ]);
+
+      document.getElementById("raw").textContent = JSON.stringify(info, null, 2);
+    };
+
+    const refresh = async () => {
+      const response = await fetch("/dashboard/info.json");
+      if (!response.ok) throw new Error("info " + response.status);
+      render(await response.json());
+    };
+
+    refresh().catch((err) => {
+      document.getElementById("raw").textContent = String(err);
+    });
+    setInterval(() => { refresh().catch(() => {}); }, 5000);
+  </script>
+</body>
+</html>

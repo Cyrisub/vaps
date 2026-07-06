@@ -15,7 +15,7 @@ import (
 )
 
 func (h *Handler) pushPayload(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireAuth(w, r, true); !ok {
+	if _, ok := h.requireAuth(w, r); !ok {
 		return
 	}
 	if h.uploads == nil {
