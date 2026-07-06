@@ -24,7 +24,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and `.zip` on macOS and Windows. SHA256 checksums for each archive are listed in the release notes.
+Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and `.zip` on macOS and Windows. Each package includes the binary (`vaps` or `vaps.exe`), default `config.toml`, `start`/`update` helper scripts, and `release-api` helpers. SHA256 checksums in the release notes are for the target binary, not the archive. Run `vaps --version` to inspect the embedded version and release channel.
 
 GitHub also attaches automatic "Source code (zip/tar.gz)" downloads to every release. That behavior is controlled by GitHub and cannot be disabled from the workflow.
 
@@ -36,7 +36,97 @@ Release type is chosen from the branch that contains the tagged commit:
 | `dev` | Pre-release |
 | Any other branch | Draft |
 
-The release title is the tag (for example `v0.0.1`). Formal releases include a commit summary since the previous tag; every release lists SHA256 checksums for its binary archives so republished builds with the same tag can be compared. Pre-releases and drafts may replace an existing release with the same tag; formal releases reject duplicate tags.
+The release title is the tag (for example `v0.0.1`). Formal releases include a commit summary since the previous tag; every release lists SHA256 checksums for its target binaries so republished builds with the same tag can be compared. Pre-releases and drafts may replace an existing release with the same tag; formal releases reject duplicate tags.
+
+## Installation
+
+Release packages are self-contained: extract and run. Each archive contains:
+
+| File | Linux / macOS | Windows |
+|------|---------------|---------|
+| Server binary | `vaps` | `vaps.exe` |
+| Start helper | `start.sh` | `start.ps1` |
+| Update helper | `update.sh` | `update.ps1` |
+| Release lookup helper | `release-api.sh` | `release-api.ps1` |
+| Default config | `config.toml` | `config.toml` |
+| Install metadata | `vaps-install.conf` | `vaps-install.conf` |
+
+`config.toml` is copied from `internal/appconfig/config.toml` at build time and matches the defaults embedded in the binary. Updates preserve an existing `config.toml` and `data/`.
+
+`vaps-install.conf` is generated at build time with `GITHUB_REPO`, `ARCH`, and `GOOS`. `INSTALL_DIR` is filled in on the first `./update.sh` or `update.ps1` run from the directory where the package was extracted.
+
+The binary records its version and release channel at build time. Inspect them with:
+
+```sh
+./vaps --version
+# vaps 0.0.1-alpha (pre-release)
+```
+
+### Install
+
+Release packages are self-contained, so first-time install is extract-and-run. Download from [GitHub Releases](https://github.com/Cyrisub/vaps/releases) (browser download needs no API), or fetch a known tag with a direct asset URL:
+
+```sh
+TAG=v0.0.1-alpha
+VER=${TAG#v}
+INSTALL_DIR=/opt/vaps
+ARCH=amd64   # must match the downloaded package
+
+mkdir -p "$INSTALL_DIR"
+curl -fsSL -o /tmp/vaps.tgz \
+  "https://github.com/Cyrisub/vaps/releases/download/${TAG}/vaps-${VER}-linux-${ARCH}.tar.gz"
+tar -xzf /tmp/vaps.tgz -C "$INSTALL_DIR"
+cd "$INSTALL_DIR" && ./start.sh start
+```
+
+Pick the tag from the releases page for pre-release builds. The URL pattern is `.../releases/download/<tag>/vaps-<version>-<os>-<arch>.tar.gz` with `<version>` equal to the tag without a leading `v`. The archive already includes `vaps-install.conf` (repo/arch/os) and `config.toml`.
+
+### After install
+
+A typical install directory looks like:
+
+```text
+/opt/vaps/
+  vaps
+  start.sh
+  update.sh
+  release-api.sh
+  config.toml
+  vaps-install.conf
+  data/
+  logs/
+```
+
+Start, stop, and inspect the background service:
+
+```sh
+./start.sh start
+./start.sh status
+./start.sh stop
+./start.sh restart
+```
+
+Update to the latest release for the binary's channel (scripts are refreshed from the new package; `config.toml` and `data/` are kept):
+
+```sh
+./update.sh
+```
+
+Override the update channel or pin a version when needed:
+
+```sh
+./update.sh --channel pre-release
+./update.sh --version v0.0.1-alpha
+./update.sh --restart
+```
+
+By default, `update.sh` reads the release channel from `./vaps --version` and only uses `--channel` when you pass it explicitly.
+
+### macOS and Windows
+
+Release `.zip` packages for macOS and Windows include the same helper scripts adapted for each platform. Use them the same way after extracting the archive: edit `config.toml` if needed, run `start.ps1` or `start.sh`, and use `update.ps1` or `update.sh` to upgrade in place.
+
+## Configuration and local development
 
 The default binary is written to `bin/vaps`. The legacy build enables v1 and backup HTTP endpoints via the `vaps_legacy_v1` build tag and is written to `bin/vaps-legacy`.
 
@@ -49,7 +139,7 @@ Run the server with defaults:
 Or use a TOML config file:
 
 ```sh
-./bin/vaps -config config.toml
+./bin/vaps --config config.toml
 ```
 
 Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-data-dir`, `-cache-bytes`, `-backup-backend`, `-backup-flush-interval`, `-backup-max-pending`, and `-backup-svn-url`. The legacy `-backup-svnmucc-bin` flag is also accepted.
@@ -64,7 +154,7 @@ Access logs are written for every HTTP request. Status logs are written every mi
 Backup support is optional. Enable the SVN backend with `backup.backend = ["svn"]` and `backup.svn.url` in `config.toml`, or override them from the command line:
 
 ```sh
-./bin/vaps -config config.toml -backup-backend svn -backup-svn-url https://svn.example.com/repo/vaps-backup
+./bin/vaps --config config.toml --backup-backend svn --backup-svn-url https://svn.example.com/repo/vaps-backup
 ```
 
 Multiple comma-separated values can be passed to `-backup-backend`, for example `-backup-backend svn,none`.

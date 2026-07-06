@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"vaps/internal/version"
 )
 
 const defaultConfigPath = "config.toml"
@@ -128,4 +129,15 @@ func configFileExists(path string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+func maybePrintVersion(args []string) (bool, error) {
+	for _, arg := range args {
+		switch arg {
+		case "-v", "--version":
+			fmt.Println(version.String())
+			return true, nil
+		}
+	}
+	return false, nil
 }

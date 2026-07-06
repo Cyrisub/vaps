@@ -138,10 +138,19 @@ jobs:
       - name: Build release artifacts
         env:
           TAG: ${{ github.ref_name }}
+          RELEASE_KIND: ${{ needs.resolve-release-type.outputs.release_kind }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          mkdir -p dist/bin dist/pkg
+          case "$RELEASE_KIND" in
+            release) CHANNEL=release ;;
+            prerelease) CHANNEL=pre-release ;;
+            *) CHANNEL=draft ;;
+          esac
+
+          mkdir -p dist/pkg dist/staging
+          : > dist/pkg/checksums.txt
+          LDFLAGS="-X vaps/internal/version.Version=${version} -X vaps/internal/version.Channel=${CHANNEL}"
 
           platforms=(
             "linux/amd64"
@@ -155,21 +164,35 @@ jobs:
             goos="${platform%%/*}"
             goarch="${platform##*/}"
             name="vaps-${version}-${goos}-${goarch}"
-            binary="dist/bin/${name}"
+            staging="dist/staging/${name}"
+            binary_name=vaps
             if [ "$goos" = "windows" ]; then
-              binary="${binary}.exe"
+              binary_name=vaps.exe
             fi
 
-            GOOS="$goos" GOARCH="$goarch" go build -o "$binary" ./cmd/vaps
+            mkdir -p "$staging"
+            GOOS="$goos" GOARCH="$goarch" go build -ldflags "$LDFLAGS" -o "$staging/${binary_name}" ./cmd/vaps
+            cp internal/appconfig/config.toml "$staging/config.toml"
+            sed -e "s/__GITHUB_REPO__/${GITHUB_REPOSITORY}/" \
+                -e "s/__ARCH__/${goarch}/" \
+                -e "s/__GOOS__/${goos}/" \
+                scripts/pkg/vaps-install.conf.template > "$staging/vaps-install.conf"
 
-            if [ "$goos" = "windows" ] || [ "$goos" = "darwin" ]; then
-              (cd dist/bin && zip -q "../pkg/${name}.zip" "$(basename "$binary")")
+            if [ "$goos" = "windows" ]; then
+              cp scripts/pkg/windows/start.ps1 scripts/pkg/windows/update.ps1 scripts/pkg/windows/release-api.ps1 "$staging/"
+              (cd "$staging" && zip -q "../../pkg/${name}.zip" ./*)
             else
-              tar -czf "dist/pkg/${name}.tar.gz" -C dist/bin "$(basename "$binary")"
+              cp scripts/pkg/unix/start.sh scripts/pkg/unix/update.sh "$staging/"
+              install -m 0755 scripts/lib/release-api.sh "$staging/release-api.sh"
+              chmod +x "$staging/${binary_name}" "$staging/start.sh" "$staging/update.sh"
+              tar -czf "dist/pkg/${name}.tar.gz" -C "$staging" .
             fi
+
+            sha256sum "$staging/${binary_name}" | awk -v artifact="$name" '{print $1 "  " artifact}' >> dist/pkg/checksums.txt
+            rm -rf "$staging"
           done
 
-          (cd dist/pkg && sha256sum *.tar.gz *.zip | sort -k2 > checksums.txt)
+          sort -k2 dist/pkg/checksums.txt -o dist/pkg/checksums.txt
 
       - name: Resolve existing release
         env:

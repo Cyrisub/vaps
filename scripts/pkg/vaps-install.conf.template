@@ -1,0 +1,4 @@
+# Install metadata for update scripts.
+GITHUB_REPO="__GITHUB_REPO__"
+ARCH="__ARCH__"
+GOOS="__GOOS__"

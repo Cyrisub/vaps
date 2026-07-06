@@ -1,6 +1,7 @@
 package appconfig_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"vaps/internal/appconfig"
+	"vaps/internal/version"
 )
 
 func TestFromArgsUsesDefaults(t *testing.T) {
@@ -377,6 +379,15 @@ func TestFromArgsRejectsSingleDashOverride(t *testing.T) {
 func TestFromArgsReturnsHelp(t *testing.T) {
 	_, err := appconfig.FromArgsWithBaseDir([]string{"--help"}, t.TempDir())
 	if err != appconfig.ErrHelp {
+		t.Fatalf("FromArgsWithBaseDir error = %v, want ErrHelp", err)
+	}
+}
+
+func TestFromArgsPrintsVersion(t *testing.T) {
+	version.Version = "0.0.1"
+	version.Channel = "pre-release"
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--version"}, t.TempDir())
+	if !errors.Is(err, appconfig.ErrHelp) {
 		t.Fatalf("FromArgsWithBaseDir error = %v, want ErrHelp", err)
 	}
 }

@@ -75,6 +75,11 @@ func FromArgs(args []string) (Config, error) {
 }
 
 func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
+	if printed, err := maybePrintVersion(args); err != nil {
+		return Config{}, err
+	} else if printed {
+		return Config{}, ErrHelp
+	}
 	cfg, err := loadDefaultConfig()
 	if err != nil {
 		return Config{}, err
