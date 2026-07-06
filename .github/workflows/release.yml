@@ -88,6 +88,7 @@ jobs:
       - name: Wait for successful Test run on commit
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -95,6 +96,7 @@ jobs:
           for attempt in $(seq 1 60); do
             read -r status conclusion <<< "$(
               gh run list \
+                --repo "$GH_REPO" \
                 --workflow=test.yml \
                 --commit="$COMMIT" \
                 --limit 1 \
