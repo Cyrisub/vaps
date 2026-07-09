@@ -80,7 +80,7 @@
       <a class="stats-tile clickable detailed" href="/dashboard/auth">
         <p class="label">Auth Tokens</p>
         <p class="value" id="auth-active">0</p>
-        <p class="hint"><span id="auth-total">0</span> total / <span id="auth-revoked">0</span> revoked</p>
+        <p class="hint"><span id="auth-total">0</span> total / <span id="auth-parked">0</span> parked / <span id="auth-revoked">0</span> revoked</p>
       </a>
       <a class="stats-tile clickable detailed" href="/dashboard/errors">
         <p class="label">Request</p>
@@ -195,6 +195,7 @@
         },
         auth: {
           active: authStats.active_count || 0,
+          parked: authStats.parked_count || 0,
           total: authStats.total_count || 0,
           expired: authStats.expired_count || 0,
           revoked: authStats.revoked_count || 0
@@ -232,6 +233,7 @@
       text("cache-misses-row", cache.misses || 0);
       text("auth-active", authStats.active_count || 0);
       text("auth-total", authStats.total_count || 0);
+      text("auth-parked", authStats.parked_count || 0);
       text("auth-revoked", authStats.revoked_count || 0);
       setCount("request-error", requestError, "is-active");
       setCount("request-warn", requestWarn, "is-active");

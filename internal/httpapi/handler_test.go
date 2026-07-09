@@ -68,8 +68,16 @@ func TestV2AuthRequestAndExpire(t *testing.T) {
 	handler := newV2Handler(t, openMetadata(t), nil, nil)
 	token := requestToken(t, handler)
 
+	missingAuth := httptest.NewRecorder()
+	handler.ServeHTTP(missingAuth, httptest.NewRequest(http.MethodGet, "/v2/auth/expire", nil))
+	if missingAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("expire without auth status = %d, want %d", missingAuth.Code, http.StatusUnauthorized)
+	}
+
 	expireResponse := httptest.NewRecorder()
-	handler.ServeHTTP(expireResponse, httptest.NewRequest(http.MethodGet, "/v2/auth/expire?token="+token, nil))
+	expireReq := httptest.NewRequest(http.MethodGet, "/v2/auth/expire", nil)
+	expireReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(expireResponse, expireReq)
 	if expireResponse.Code != http.StatusOK {
 		t.Fatalf("expire status = %d, want %d", expireResponse.Code, http.StatusOK)
 	}
@@ -80,6 +88,52 @@ func TestV2AuthRequestAndExpire(t *testing.T) {
 	handler.ServeHTTP(pull, req)
 	if pull.Code != http.StatusUnauthorized {
 		t.Fatalf("pull after expire status = %d, want %d", pull.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestV2AuthParkAndWake(t *testing.T) {
+	handler, authStore := newV2HandlerWithAuth(t, openMetadata(t), nil, nil)
+	token := requestToken(t, handler)
+
+	park := httptest.NewRecorder()
+	parkReq := httptest.NewRequest(http.MethodGet, "/v2/auth/park", nil)
+	parkReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(park, parkReq)
+	if park.Code != http.StatusOK {
+		t.Fatalf("park status = %d, want %d; body=%q", park.Code, http.StatusOK, park.Body.String())
+	}
+	var parkBody struct {
+		Parked bool `json:"parked"`
+	}
+	if err := json.Unmarshal(park.Body.Bytes(), &parkBody); err != nil {
+		t.Fatalf("decode park: %v", err)
+	}
+	if !parkBody.Parked {
+		t.Fatalf("parked = false, want true")
+	}
+
+	pull := httptest.NewRecorder()
+	pullReq := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+ioHash([]byte("missing")), nil)
+	pullReq.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(pull, pullReq)
+	if pull.Code != http.StatusUnauthorized {
+		t.Fatalf("pull after park status = %d, want %d", pull.Code, http.StatusUnauthorized)
+	}
+
+	tokens, err := authStore.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(tokens) != 1 || auth.TokenStatus(tokens[0], time.Now().UTC()) != "parked" {
+		t.Fatalf("token status after park = %#v", tokens)
+	}
+
+	woken := requestToken(t, handler)
+	if woken != token {
+		t.Fatalf("wake returned different token")
+	}
+	if _, err := authStore.Validate(woken); err != nil {
+		t.Fatalf("Validate after wake: %v", err)
 	}
 }
 

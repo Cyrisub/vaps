@@ -171,8 +171,13 @@ Payload objects are identified with the `iohash` query parameter. An `iohash` is
 
 - `POST /v2/auth/request`
 
-  Request a bearer token. No auth required. If an active token already exists for
-  the same `client_id` and client IP, that token is reused and its idle expiry is refreshed.
+  Request a bearer token. No auth required. Reuse rules for the same `client_id`
+  and client IP:
+
+  1. If an **active** token exists, reuse it and refresh its idle expiry.
+  2. Else if a **parked** token exists, wake it (clear parked state, set a new
+     idle expiry) and return the same token value.
+  3. Otherwise issue a new token.
 
   Request:
 
@@ -189,9 +194,30 @@ Payload objects are identified with the `iohash` query parameter. An `iohash` is
   `expires_at` uses a sliding idle window configured by `auth.expire_time`. Any successful
   `Authorization: Bearer <token>` check refreshes the expiry time.
 
-- `GET /v2/auth/expire?token=<token>`
+- `GET /v2/auth/park`
 
-  Immediately revoke a token. No auth header required.
+  Park the caller's active token. Requires `Authorization: Bearer <token>`.
+  Successful auth refreshes idle expiry, then the token becomes **parked**: it
+  cannot authenticate until woken by a matching `/v2/auth/request`, and it does
+  not idle-expire while parked.
+
+  Response:
+
+  ```json
+  {"parked":true}
+  ```
+
+- `GET /v2/auth/expire`
+
+  Immediately revoke the caller's token. Requires `Authorization: Bearer <token>`.
+  Successful auth refreshes idle expiry before revoke. Revoked tokens are never
+  reused.
+
+  Response:
+
+  ```json
+  {"expired":true}
+  ```
 
 Dashboard auth cleanup (HTML Auth Browser):
 

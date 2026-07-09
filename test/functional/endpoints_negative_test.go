@@ -38,19 +38,27 @@ func TestFunctionalNegativeAuthRequest(t *testing.T) {
 func TestFunctionalNegativeAuthExpire(t *testing.T) {
 	srv := startServer(t)
 
-	missingToken, err := srv.Client.Get(url(srv.URL, "/v2/auth/expire"))
+	missingAuth, err := srv.Client.Get(url(srv.URL, "/v2/auth/expire"))
 	if err != nil {
-		t.Fatalf("GET expire without token: %v", err)
+		t.Fatalf("GET expire without auth: %v", err)
 	}
-	requireStatus(t, missingToken, http.StatusBadRequest)
-	readBody(t, missingToken)
+	requireStatus(t, missingAuth, http.StatusUnauthorized)
+	readBody(t, missingAuth)
 
-	unknownToken, err := srv.Client.Get(urlf(srv.URL, "/v2/auth/expire?token=%s", "not-a-real-token"))
-	if err != nil {
-		t.Fatalf("GET expire unknown token: %v", err)
-	}
-	requireStatus(t, unknownToken, http.StatusOK)
+	unknownToken := authRequest(t, srv.Client, http.MethodGet, url(srv.URL, "/v2/auth/expire"), "not-a-real-token", nil)
+	requireStatus(t, unknownToken, http.StatusUnauthorized)
 	readBody(t, unknownToken)
+}
+
+func TestFunctionalNegativeAuthPark(t *testing.T) {
+	srv := startServer(t)
+
+	missingAuth, err := srv.Client.Get(url(srv.URL, "/v2/auth/park"))
+	if err != nil {
+		t.Fatalf("GET park without auth: %v", err)
+	}
+	requireStatus(t, missingAuth, http.StatusUnauthorized)
+	readBody(t, missingAuth)
 }
 
 func TestFunctionalNegativePullAuthAndValidation(t *testing.T) {

@@ -19,6 +19,7 @@ var (
 	ErrNotFound = errors.New("auth token not found")
 	ErrExpired  = errors.New("auth token expired")
 	ErrRevoked  = errors.New("auth token revoked")
+	ErrParked   = errors.New("auth token parked")
 )
 
 const tokenBucket = "auth_tokens"
@@ -34,12 +35,14 @@ type Token struct {
 	ClientInfo ClientInfo `json:"client_info"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ExpiresAt  time.Time  `json:"expires_at"`
+	ParkedAt   *time.Time `json:"parked_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
 type Stats struct {
-	TotalCount  int `json:"total_count"`
-	ActiveCount int `json:"active_count"`
+	TotalCount   int `json:"total_count"`
+	ActiveCount  int `json:"active_count"`
+	ParkedCount  int `json:"parked_count"`
 	ExpiredCount int `json:"expired_count"`
 	RevokedCount int `json:"revoked_count"`
 }
@@ -92,10 +95,38 @@ func (s *Store) Issue(clientID, remoteIP, userAgent string, clientInfo ClientInf
 	var result IssueResult
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		now := time.Now().UTC()
-		if existing, ok, err := s.findActiveLocked(tx, clientID, remoteIP, now); err != nil {
+		if existing, ok, err := s.findByStatusLocked(tx, clientID, remoteIP, now, "active"); err != nil {
 			return err
 		} else if ok {
 			if existing.Token != "" {
+				existing.ExpiresAt = now.Add(s.expireTime)
+				existing.RemoteIP = remoteIP
+				existing.ParkedAt = nil
+				if userAgent != "" {
+					existing.UserAgent = userAgent
+				}
+				if clientInfo != nil {
+					existing.ClientInfo = clientInfo
+				}
+				if err := s.putLocked(tx, existing); err != nil {
+					return err
+				}
+				result = IssueResult{Token: existing.Token, ExpiresAt: existing.ExpiresAt}
+				return nil
+			}
+			// Legacy records without a stored plaintext token cannot be reused.
+			revokedAt := now
+			existing.RevokedAt = &revokedAt
+			if err := s.putLocked(tx, existing); err != nil {
+				return err
+			}
+		}
+
+		if existing, ok, err := s.findByStatusLocked(tx, clientID, remoteIP, now, "parked"); err != nil {
+			return err
+		} else if ok {
+			if existing.Token != "" {
+				existing.ParkedAt = nil
 				existing.ExpiresAt = now.Add(s.expireTime)
 				existing.RemoteIP = remoteIP
 				if userAgent != "" {
@@ -110,7 +141,6 @@ func (s *Store) Issue(clientID, remoteIP, userAgent string, clientInfo ClientInf
 				result = IssueResult{Token: existing.Token, ExpiresAt: existing.ExpiresAt}
 				return nil
 			}
-			// Legacy records without a stored plaintext token cannot be reused.
 			revokedAt := now
 			existing.RevokedAt = &revokedAt
 			if err := s.putLocked(tx, existing); err != nil {
@@ -147,13 +177,16 @@ func (s *Store) Validate(token string) (Token, error) {
 	if err != nil {
 		return Token{}, err
 	}
-	if record.RevokedAt != nil {
+	switch TokenStatus(record, time.Now().UTC()) {
+	case "revoked":
 		return Token{}, ErrRevoked
-	}
-	if time.Now().UTC().After(record.ExpiresAt) {
+	case "parked":
+		return Token{}, ErrParked
+	case "expired":
 		return Token{}, ErrExpired
+	default:
+		return record, nil
 	}
-	return record, nil
 }
 
 func (s *Store) Refresh(token string) (time.Time, error) {
@@ -164,10 +197,12 @@ func (s *Store) Refresh(token string) (time.Time, error) {
 		if err != nil {
 			return err
 		}
-		if record.RevokedAt != nil {
+		switch TokenStatus(record, time.Now().UTC()) {
+		case "revoked":
 			return ErrRevoked
-		}
-		if time.Now().UTC().After(record.ExpiresAt) {
+		case "parked":
+			return ErrParked
+		case "expired":
 			return ErrExpired
 		}
 		record.ExpiresAt = time.Now().UTC().Add(s.expireTime)
@@ -175,6 +210,27 @@ func (s *Store) Refresh(token string) (time.Time, error) {
 		return s.putLocked(tx, record)
 	})
 	return expiresAt, err
+}
+
+func (s *Store) Park(token string) error {
+	hash := hashToken(token)
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		record, err := s.getLocked(tx, hash)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		switch TokenStatus(record, now) {
+		case "revoked":
+			return ErrRevoked
+		case "parked":
+			return ErrParked
+		case "expired":
+			return ErrExpired
+		}
+		record.ParkedAt = &now
+		return s.putLocked(tx, record)
+	})
 }
 
 func (s *Store) Revoke(token string) error {
@@ -189,6 +245,7 @@ func (s *Store) Revoke(token string) error {
 		}
 		now := time.Now().UTC()
 		record.RevokedAt = &now
+		record.ParkedAt = nil
 		return s.putLocked(tx, record)
 	})
 }
@@ -282,6 +339,8 @@ func (s *Store) Stats() (Stats, error) {
 		switch TokenStatus(token, now) {
 		case "active":
 			stats.ActiveCount++
+		case "parked":
+			stats.ParkedCount++
 		case "expired":
 			stats.ExpiredCount++
 		case "revoked":
@@ -294,6 +353,9 @@ func (s *Store) Stats() (Stats, error) {
 func TokenStatus(token Token, now time.Time) string {
 	if token.RevokedAt != nil {
 		return "revoked"
+	}
+	if token.ParkedAt != nil {
+		return "parked"
 	}
 	if now.After(token.ExpiresAt) {
 		return "expired"
@@ -309,7 +371,7 @@ func (s *Store) LookupByHash(hash string) (Token, error) {
 	return s.get(hash)
 }
 
-func (s *Store) findActiveLocked(tx *bbolt.Tx, clientID, remoteIP string, now time.Time) (Token, bool, error) {
+func (s *Store) findByStatusLocked(tx *bbolt.Tx, clientID, remoteIP string, now time.Time, status string) (Token, bool, error) {
 	bucket := tx.Bucket([]byte(tokenBucket))
 	if bucket == nil {
 		return Token{}, false, nil
@@ -325,7 +387,7 @@ func (s *Store) findActiveLocked(tx *bbolt.Tx, clientID, remoteIP string, now ti
 		if record.ClientID != clientID || !sameClientIP(record.RemoteIP, remoteIP) {
 			return nil
 		}
-		if TokenStatus(record, now) != "active" {
+		if TokenStatus(record, now) != status {
 			return nil
 		}
 		if !found || record.CreatedAt.After(best.CreatedAt) {

@@ -20,6 +20,10 @@ type authExpireResponse struct {
 	Expired bool `json:"expired"`
 }
 
+type authParkResponse struct {
+	Parked bool `json:"parked"`
+}
+
 func (h *Handler) authRequest(w http.ResponseWriter, r *http.Request) {
 	if h.auth == nil {
 		http.Error(w, "auth is not configured", http.StatusServiceUnavailable)
@@ -44,13 +48,8 @@ func (h *Handler) authRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authExpire(w http.ResponseWriter, r *http.Request) {
-	if h.auth == nil {
-		http.Error(w, "auth is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	token := strings.TrimSpace(r.URL.Query().Get("token"))
-	if token == "" {
-		http.Error(w, "token is required", http.StatusBadRequest)
+	token, ok := h.requireAuth(w, r)
+	if !ok {
 		return
 	}
 	if err := h.auth.Revoke(token); err != nil {
@@ -58,6 +57,18 @@ func (h *Handler) authExpire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, authExpireResponse{Expired: true})
+}
+
+func (h *Handler) authPark(w http.ResponseWriter, r *http.Request) {
+	token, ok := h.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if err := h.auth.Park(token); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, http.StatusOK, authParkResponse{Parked: true})
 }
 
 func clientIP(r *http.Request) string {

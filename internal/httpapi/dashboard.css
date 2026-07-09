@@ -711,6 +711,11 @@ pre {
   background: color-mix(in srgb, var(--theme_ok) 12%, transparent);
   border-color: color-mix(in srgb, var(--theme_ok) 35%, transparent);
 }
+.pill.parked {
+  color: var(--theme_ln);
+  background: color-mix(in srgb, var(--theme_ln) 12%, transparent);
+  border-color: color-mix(in srgb, var(--theme_ln) 35%, transparent);
+}
 .pill.expired {
   color: var(--theme_warn);
   background: color-mix(in srgb, var(--theme_warn) 12%, transparent);

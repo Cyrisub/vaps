@@ -202,6 +202,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.dashboardInfo(w)
 	case r.URL.Path == "/v2/auth/request" && r.Method == http.MethodPost:
 		h.authRequest(w, r)
+	case r.URL.Path == "/v2/auth/park" && r.Method == http.MethodGet:
+		h.authPark(w, r)
 	case r.URL.Path == "/v2/auth/expire" && r.Method == http.MethodGet:
 		h.authExpire(w, r)
 	case r.URL.Path == "/v2/payload/pull":

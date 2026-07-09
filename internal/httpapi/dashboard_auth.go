@@ -28,6 +28,8 @@ type authQueryItem struct {
 	CreatedAtHuman  string            `json:"created_at_human"`
 	ExpiresAt       time.Time         `json:"expires_at"`
 	ExpiresAtHuman  string            `json:"expires_at_human"`
+	ParkedAt        *time.Time        `json:"parked_at,omitempty"`
+	ParkedAtHuman   string            `json:"parked_at_human,omitempty"`
 	RevokedAt       *time.Time        `json:"revoked_at,omitempty"`
 	RevokedAtHuman  string            `json:"revoked_at_human,omitempty"`
 	ErrorCount      int64             `json:"error_count"`
@@ -142,10 +144,10 @@ func parseAuthQuery(r *http.Request) (authQuery, error) {
 	query := authQuery{Limit: 100}
 	if value := strings.TrimSpace(r.URL.Query().Get("status")); value != "" {
 		switch value {
-		case "active", "expired", "revoked":
+		case "active", "parked", "expired", "revoked":
 			query.Status = value
 		default:
-			return authQuery{}, errors.New("status must be active, expired, or revoked")
+			return authQuery{}, errors.New("status must be active, parked, expired, or revoked")
 		}
 	}
 	query.ClientID = strings.TrimSpace(r.URL.Query().Get("client_id"))
@@ -188,6 +190,10 @@ func newAuthQueryItem(token auth.Token, status string, errorCount int64) authQue
 		ExpiresAt:      token.ExpiresAt,
 		ExpiresAtHuman: formatDashboardTime(token.ExpiresAt),
 		ErrorCount:     errorCount,
+	}
+	if token.ParkedAt != nil {
+		item.ParkedAt = token.ParkedAt
+		item.ParkedAtHuman = formatDashboardTime(*token.ParkedAt)
 	}
 	if token.RevokedAt != nil {
 		item.RevokedAt = token.RevokedAt

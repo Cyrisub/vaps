@@ -28,16 +28,34 @@ func TestFunctionalV2AuthFlow(t *testing.T) {
 	srv := testserver.Start(t, testserver.Options{})
 	token := requestToken(t, srv.Client, srv.URL)
 
-	expireResp, err := srv.Client.Get(urlf(srv.URL, "/v2/auth/expire?token=%s", token))
-	if err != nil {
-		t.Fatalf("GET /v2/auth/expire: %v", err)
-	}
+	expireResp := authRequest(t, srv.Client, http.MethodGet, url(srv.URL, "/v2/auth/expire"), token, nil)
 	requireStatus(t, expireResp, http.StatusOK)
 	readBody(t, expireResp)
 
 	pull := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", ioHash([]byte("missing"))), token, nil)
 	requireStatus(t, pull, http.StatusUnauthorized)
 	readBody(t, pull)
+}
+
+func TestFunctionalV2AuthParkAndWake(t *testing.T) {
+	srv := testserver.Start(t, testserver.Options{})
+	token := requestToken(t, srv.Client, srv.URL)
+
+	parkResp := authRequest(t, srv.Client, http.MethodGet, url(srv.URL, "/v2/auth/park"), token, nil)
+	requireStatus(t, parkResp, http.StatusOK)
+	readBody(t, parkResp)
+
+	pull := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", ioHash([]byte("missing"))), token, nil)
+	requireStatus(t, pull, http.StatusUnauthorized)
+	readBody(t, pull)
+
+	woken := requestToken(t, srv.Client, srv.URL)
+	if woken != token {
+		t.Fatalf("wake returned different token")
+	}
+	pullAfterWake := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", ioHash([]byte("missing"))), woken, nil)
+	requireStatus(t, pullAfterWake, http.StatusNotFound)
+	readBody(t, pullAfterWake)
 }
 
 func TestFunctionalV2DirectPushPullAndRange(t *testing.T) {
