@@ -187,6 +187,7 @@ func (s *Store) Append(id string, offset int64, reader io.Reader) (Session, erro
 
 func (s *Store) MarkCompleted(id string) (Session, error) {
 	var session Session
+	var partialTempPaths []string
 	err := s.db.Update(func(tx *bbolt.Tx) error {
 		current, err := s.getLocked(tx, id)
 		if err != nil {
@@ -196,13 +197,40 @@ func (s *Store) MarkCompleted(id string) (Session, error) {
 		current.CompletedAt = &now
 		current.UpdatedAt = now
 		session = current
-		return s.putLocked(tx, current)
+		if current.Kind == KindFinal {
+			for _, ref := range current.PartialRefs {
+				partial, err := s.getLocked(tx, ref)
+				if errors.Is(err, ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if partial.TempPath != "" {
+					partialTempPaths = append(partialTempPaths, partial.TempPath)
+				}
+				if err := s.deleteLocked(tx, ref); err != nil {
+					return err
+				}
+			}
+		}
+		return s.deleteLocked(tx, id)
 	})
-	return session, err
+	if err != nil {
+		return Session{}, err
+	}
+	if session.TempPath != "" {
+		_ = os.Remove(session.TempPath)
+	}
+	for _, path := range partialTempPaths {
+		_ = os.Remove(path)
+	}
+	return session, nil
 }
 
 func (s *Store) Terminate(id string) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	var tempPath string
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		current, err := s.getLocked(tx, id)
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -210,17 +238,16 @@ func (s *Store) Terminate(id string) error {
 		if err != nil {
 			return err
 		}
-		now := time.Now().UTC()
-		current.TerminatedAt = &now
-		current.UpdatedAt = now
-		if err := s.putLocked(tx, current); err != nil {
-			return err
-		}
-		if current.TempPath != "" {
-			_ = os.Remove(current.TempPath)
-		}
-		return nil
+		tempPath = current.TempPath
+		return s.deleteLocked(tx, id)
 	})
+	if err != nil {
+		return err
+	}
+	if tempPath != "" {
+		_ = os.Remove(tempPath)
+	}
+	return nil
 }
 
 func (s *Store) OpenTemp(id string) (*os.File, Session, error) {
@@ -302,7 +329,7 @@ func (s *Store) refreshOffset(id string, offset int64) (Session, error) {
 }
 
 func (s *Store) CleanupExpired() error {
-	var expired []Session
+	var toPurge []Session
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(sessionBucket))
 		now := time.Now().UTC()
@@ -311,11 +338,8 @@ func (s *Store) CleanupExpired() error {
 			if err := json.Unmarshal(value, &session); err != nil {
 				return err
 			}
-			if session.TerminatedAt != nil || session.CompletedAt != nil {
-				return nil
-			}
-			if now.After(session.ExpiresAt) {
-				expired = append(expired, session)
+			if session.TerminatedAt != nil || session.CompletedAt != nil || now.After(session.ExpiresAt) {
+				toPurge = append(toPurge, session)
 			}
 			return nil
 		})
@@ -323,7 +347,7 @@ func (s *Store) CleanupExpired() error {
 	if err != nil {
 		return err
 	}
-	for _, session := range expired {
+	for _, session := range toPurge {
 		_ = s.Terminate(session.ID)
 	}
 	return nil
@@ -359,6 +383,10 @@ func (s *Store) putLocked(tx *bbolt.Tx, session Session) error {
 		return err
 	}
 	return bucket.Put([]byte(session.ID), encoded)
+}
+
+func (s *Store) deleteLocked(tx *bbolt.Tx, id string) error {
+	return tx.Bucket([]byte(sessionBucket)).Delete([]byte(id))
 }
 
 func (s *Store) get(id string) (Session, error) {

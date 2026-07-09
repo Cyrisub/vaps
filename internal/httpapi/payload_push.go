@@ -273,10 +273,13 @@ func (h *Handler) finalizeUpload(r *http.Request, w http.ResponseWriter, session
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 	info, err := h.store.Put(current.ExpectedHash, file)
+	closeErr := file.Close()
 	if err != nil {
 		return err
+	}
+	if closeErr != nil {
+		return closeErr
 	}
 	if err := h.commitPayloadMetadata(r, info); err != nil {
 		return err
