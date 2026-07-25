@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"vaps/internal/blobstore"
-	"vaps/internal/metadata"
+	"vaps/internal/objectstore"
 	"vaps/internal/uploadsession"
 )
 
@@ -61,8 +60,12 @@ func (h *Handler) directPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limited := http.MaxBytesReader(w, r.Body, h.opts.UploadDirectMaxBytes+1)
-	info, err := h.store.Put(hash, limited)
+	info, err := h.putPayloadDurably(r.Context(), hash, limited)
 	if err != nil {
+		if errors.Is(err, objectstore.ErrIntegrityMismatch) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if errors.Is(err, blobstore.ErrInvalidHash) || errors.Is(err, blobstore.ErrHashMismatch) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -79,7 +82,7 @@ func (h *Handler) directPush(w http.ResponseWriter, r *http.Request) {
 	if info.Created {
 		status = http.StatusCreated
 	}
-	if err := h.commitPayloadMetadata(r, info); err != nil {
+	if err := h.commitPayloadMetadata(info); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -273,7 +276,7 @@ func (h *Handler) finalizeUpload(r *http.Request, w http.ResponseWriter, session
 	if err != nil {
 		return err
 	}
-	info, err := h.store.Put(current.ExpectedHash, file)
+	info, err := h.putPayloadDurably(r.Context(), current.ExpectedHash, file)
 	closeErr := file.Close()
 	if err != nil {
 		return err
@@ -281,7 +284,7 @@ func (h *Handler) finalizeUpload(r *http.Request, w http.ResponseWriter, session
 	if closeErr != nil {
 		return closeErr
 	}
-	if err := h.commitPayloadMetadata(r, info); err != nil {
+	if err := h.commitPayloadMetadata(info); err != nil {
 		return err
 	}
 	if _, err := h.uploads.MarkCompleted(session.ID); err != nil {
@@ -303,41 +306,6 @@ func (h *Handler) writeTusCreated(w http.ResponseWriter, session uploadsession.S
 	}
 	setTusHeaders(w, formatExpires(session.ExpiresAt))
 	w.WriteHeader(http.StatusCreated)
-}
-
-func (h *Handler) commitPayloadMetadata(r *http.Request, info blobstore.Info) error {
-	if h.meta == nil {
-		if h.backup != nil {
-			return h.queueBackup(r.Context(), info.Hash)
-		}
-		return nil
-	}
-	record, err := h.meta.GetPayload(info.Hash)
-	if errors.Is(err, metadata.ErrNotFound) {
-		now := time.Now().UTC()
-		record = metadata.Payload{
-			Hash:      info.Hash,
-			Size:      info.Size,
-			Status:    metadata.StatusLocal,
-			CreatedAt: &now,
-		}
-	} else if err != nil {
-		return err
-	} else {
-		now := time.Now().UTC()
-		record.Size = info.Size
-		record.Status |= metadata.StatusLocal
-		if record.CreatedAt == nil {
-			record.CreatedAt = &now
-		}
-	}
-	if err := h.meta.PutPayload(record); err != nil {
-		return err
-	}
-	if h.backup != nil {
-		return h.queueBackup(r.Context(), info.Hash)
-	}
-	return nil
 }
 
 func writeUploadError(w http.ResponseWriter, err error) {

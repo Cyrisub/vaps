@@ -20,18 +20,18 @@ var defaultConfigTOML []byte
 type Duration time.Duration
 
 type Config struct {
-	Addr              string       `toml:"addr" hidden:"" name:"addr"`
-	DataDir           string       `toml:"data_dir" hidden:"" name:"data-dir"`
-	MetadataDB        string       `toml:"metadata_db" hidden:"" name:"metadata-db"`
-	AuthDB            string       `toml:"auth_db" hidden:"" name:"auth-db"`
-	UploadDB          string       `toml:"upload_db" hidden:"" name:"upload-db"`
-	LogDir            string       `toml:"log_dir" hidden:"" name:"log-dir"`
-	LogRetentionDays  int          `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
-	StatusLogInterval Duration     `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
-	Cache             CacheConfig  `toml:"cache" embed:"" prefix:"cache-"`
-	Auth              AuthConfig   `toml:"auth" embed:"" prefix:"auth-"`
-	Upload            UploadConfig `toml:"upload" embed:"" prefix:"upload-"`
-	Backup            BackupConfig `toml:"backup" embed:"" prefix:"backup-"`
+	Addr              string        `toml:"addr" hidden:"" name:"addr"`
+	DataDir           string        `toml:"data_dir" hidden:"" name:"data-dir"`
+	MetadataDB        string        `toml:"metadata_db" hidden:"" name:"metadata-db"`
+	AuthDB            string        `toml:"auth_db" hidden:"" name:"auth-db"`
+	UploadDB          string        `toml:"upload_db" hidden:"" name:"upload-db"`
+	LogDir            string        `toml:"log_dir" hidden:"" name:"log-dir"`
+	LogRetentionDays  int           `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
+	StatusLogInterval Duration      `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
+	Cache             CacheConfig   `toml:"cache" embed:"" prefix:"cache-"`
+	Auth              AuthConfig    `toml:"auth" embed:"" prefix:"auth-"`
+	Upload            UploadConfig  `toml:"upload" embed:"" prefix:"upload-"`
+	Storage           StorageConfig `toml:"storage" embed:"" prefix:"storage-"`
 }
 
 type AuthConfig struct {
@@ -50,17 +50,22 @@ type CacheConfig struct {
 	MaxObjectBytes utils.ByteSize `toml:"max_object_bytes" hidden:"" name:"max-object-bytes"`
 }
 
-type BackupConfig struct {
-	Backend       []string        `toml:"backend" hidden:"" name:"backend"`
-	FlushInterval Duration        `toml:"flush_interval" hidden:"" name:"flush-interval"`
-	MaxPending    int             `toml:"max_pending" hidden:"" name:"max-pending"`
-	SVN           SVNBackupConfig `toml:"svn" embed:"" prefix:"svn-"`
+type StorageConfig struct {
+	S3    S3StorageConfig    `toml:"s3" embed:"" prefix:"s3-"`
+	Local LocalStorageConfig `toml:"local" embed:"" prefix:"local-"`
 }
 
-type SVNBackupConfig struct {
-	URL     string `toml:"url" hidden:"" name:"url"`
-	Bin     string `toml:"bin" hidden:"" name:"bin"`
-	MuccBin string `toml:"mucc_bin" hidden:"" name:"mucc-bin" aliases:"backup-svnmucc-bin"`
+type S3StorageConfig struct {
+	Bucket         string `toml:"bucket" hidden:"" name:"bucket"`
+	Region         string `toml:"region" hidden:"" name:"region"`
+	Endpoint       string `toml:"endpoint" hidden:"" name:"endpoint"`
+	Prefix         string `toml:"prefix" hidden:"" name:"prefix"`
+	ForcePathStyle bool   `toml:"force_path_style" hidden:"" name:"force-path-style"`
+}
+
+type LocalStorageConfig struct {
+	Dir           string         `toml:"dir" hidden:"" name:"dir"`
+	MaxCacheBytes utils.ByteSize `toml:"max_cache_bytes" hidden:"" name:"max-cache-bytes"`
 }
 
 func FromArgs(args []string) (Config, error) {
@@ -112,6 +117,7 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	cfg.AuthDB = resolvePath(baseDir, cfg.AuthDB)
 	cfg.UploadDB = resolvePath(baseDir, cfg.UploadDB)
 	cfg.Upload.Dir = resolvePath(baseDir, cfg.Upload.Dir)
+	cfg.Storage.Local.Dir = resolvePath(baseDir, cfg.Storage.Local.Dir)
 	return cfg, nil
 }
 
@@ -177,33 +183,10 @@ func rejectUnknownFields(md toml.MetaData) error {
 }
 
 func normalize(cfg *Config) {
-	cfg.Backup.Backend = normalizeBackupBackends(cfg.Backup.Backend)
-	cfg.Backup.SVN.URL = strings.TrimSpace(cfg.Backup.SVN.URL)
-	cfg.Backup.SVN.Bin = strings.TrimSpace(cfg.Backup.SVN.Bin)
-	cfg.Backup.SVN.MuccBin = strings.TrimSpace(cfg.Backup.SVN.MuccBin)
-}
-
-func normalizeBackupBackends(backends []string) []string {
-	normalized := make([]string, 0, len(backends))
-	for _, name := range backends {
-		name = strings.ToLower(strings.TrimSpace(name))
-		if name == "" {
-			continue
-		}
-		normalized = append(normalized, name)
-	}
-	return normalized
-}
-
-// EnabledBackupBackends returns configured backup backends excluding none entries.
-func EnabledBackupBackends(backends []string) []string {
-	enabled := make([]string, 0, len(backends))
-	for _, name := range backends {
-		if name != "none" {
-			enabled = append(enabled, name)
-		}
-	}
-	return enabled
+	cfg.Storage.S3.Bucket = strings.TrimSpace(cfg.Storage.S3.Bucket)
+	cfg.Storage.S3.Region = strings.TrimSpace(cfg.Storage.S3.Region)
+	cfg.Storage.S3.Endpoint = strings.TrimSpace(cfg.Storage.S3.Endpoint)
+	cfg.Storage.S3.Prefix = strings.Trim(cfg.Storage.S3.Prefix, "/")
 }
 
 func validate(cfg Config) error {
@@ -219,44 +202,17 @@ func validate(cfg Config) error {
 	if time.Duration(cfg.Upload.CleanupInterval) <= 0 {
 		return errors.New("upload-cleanup-interval must be positive")
 	}
-	if time.Duration(cfg.Backup.FlushInterval) < 0 {
-		return errors.New("backup-flush-interval must not be negative")
+	if cfg.Storage.S3.Bucket == "" {
+		return errors.New("storage-s3-bucket is required")
 	}
-	if cfg.Backup.MaxPending < 0 {
-		return errors.New("backup-max-pending must not be negative")
+	if cfg.Storage.S3.Region == "" {
+		return errors.New("storage-s3-region is required")
 	}
-	return validateBackupBackends(cfg.Backup.Backend, cfg.Backup.SVN)
-}
-
-func validateBackupBackends(backends []string, svn SVNBackupConfig) error {
-	seen := map[string]struct{}{}
-	svnEnabled := false
-	for _, name := range backends {
-		if name == "none" {
-			continue
-		}
-		if _, exists := seen[name]; exists {
-			return fmt.Errorf("duplicate backup backend %q", name)
-		}
-		seen[name] = struct{}{}
-		switch name {
-		case "svn":
-			svnEnabled = true
-		default:
-			return errors.New("backup backend must be one of none, svn")
-		}
+	if cfg.Storage.Local.Dir == "" {
+		return errors.New("storage-local-dir is required")
 	}
-	if !svnEnabled {
-		return nil
-	}
-	if svn.URL == "" {
-		return errors.New("backup-svn-url is required when backup backend is svn")
-	}
-	if svn.Bin == "" {
-		return errors.New("backup-svn-bin must not be empty when backup backend is svn")
-	}
-	if svn.MuccBin == "" {
-		return errors.New("backup-svnmucc-bin must not be empty when backup backend is svn")
+	if cfg.Storage.Local.MaxCacheBytes < 0 {
+		return errors.New("storage-local-max-cache-bytes must not be negative")
 	}
 	return nil
 }

@@ -128,7 +128,7 @@ Release `.zip` packages for macOS and Windows include the same helper scripts ad
 
 ## Configuration and local development
 
-The default binary is written to `bin/vaps`. The legacy build enables v1 and backup HTTP endpoints via the `vaps_legacy_v1` build tag and is written to `bin/vaps-legacy`.
+The default binary is written to `bin/vaps`.
 
 Run the server with defaults:
 
@@ -142,28 +142,20 @@ Or use a TOML config file:
 ./bin/vaps --config config.toml
 ```
 
-Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-data-dir`, `-cache-bytes`, `-backup-backend`, `-backup-flush-interval`, `-backup-max-pending`, and `-backup-svn-url`. The legacy `-backup-svnmucc-bin` flag is also accepted.
+Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-storage-s3-bucket`, `-storage-s3-region`, and `-storage-local-max-cache-bytes`.
 
-By default, payload blobs are stored under `data/blobs` and metadata is stored in `data/metadata.db`.
+Payloads are durably stored in the configured S3 bucket at `<prefix>/<iohash>`. The local `data/blobs` directory is a bounded, disposable cache; metadata is stored in `data/metadata.db`.
 Relative paths are resolved from the directory that contains the `vaps` binary, not from the shell's current working directory.
 The in-memory LRU cache defaults to 64 MiB total and caches payloads up to 4 MiB.
 Access logs are written for every HTTP request. Status logs are written every minute by default; set `status_log_interval` to `"0s"` or use `-status-log-interval 0s` to disable them. Logs are written to stderr and to `logs/vaps-YYYY-MM-DD.log` beside the binary by default.
 
-## Backup
+## Storage
 
-Backup support is optional. Enable the SVN backend with `backup.backend = ["svn"]` and `backup.svn.url` in `config.toml`, or override them from the command line:
-
-```sh
-./bin/vaps --config config.toml --backup-backend svn --backup-svn-url https://svn.example.com/repo/vaps-backup
-```
-
-Multiple comma-separated values can be passed to `-backup-backend`, for example `-backup-backend svn,none`.
-
-The SVN backend stores payloads under the configured backup root using a three-level hash shard path: `<hash[0:2]>/<hash[2:4]>/<hash[4:6]>/<hash[6:]>.upayload`. On startup, VAPS starts a background refresh of the in-memory backup metadata set; for SVN this is a recursive `svn list` of the configured backup root. Listed backup payloads are merged into the main metadata database as backup-only records when no local record exists. A later `GET /v1/payload` for a backup-only payload downloads it from the backend, writes it into local blobs, and updates the metadata with the local size. Payload uploads are queued as `pending` and flushed in batches when `backup.flush_interval` elapses or `backup.max_pending` is reached, reducing small SVN commits. Set `backup.svn.bin` and `backup.svn.mucc_bin`, or use command-line overrides, to choose different binary names when needed.
+S3 is the authoritative payload store. Each upload is verified against its UE `FIoHash` and full BLAKE3-256 digest, then synchronously committed to S3 before VAPS returns success. The AWS SDK default credential chain is used, so deployments can use environment credentials, shared profiles, web identity, or workload identity. `storage.s3.endpoint` and `storage.s3.force_path_style` support MinIO and other S3-compatible services.
 
 ## HTTP API
 
-By default, the server exposes v2 endpoints. Legacy v1 payload and backup endpoints are available only in builds compiled with `-tags vaps_legacy_v1`.
+VAPS exposes only v2 endpoints.
 
 Payload objects are identified with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the payload bytes: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
 
@@ -281,15 +273,6 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 - `GET /v2/metadata?payload_hash=<iohash>`
 
   Query VCS metadata records for a payload.
-
-### Legacy v1 (build tag only)
-
-When built with `-tags vaps_legacy_v1`, the server also exposes:
-
-- `PUT/GET/HEAD /v1/payload?iohash=<iohash>`
-- `POST /v1/payload/exists`
-- `GET /v1/backup/payloads`
-- `PUT /v1/backup/payload?iohash=<iohash>`
 
 ### Dashboard
 

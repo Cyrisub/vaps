@@ -23,12 +23,13 @@ expiration = "24h"
 cleanup_interval = "1m"
 dir = "data/uploads"
 
-[backup]
-backend = []
-flush_interval = "1m"
-max_pending = 50
-svn = {
-    url = "",
-    bin = "svn",
-    mucc_bin = "svnmucc",
-}
+[storage.s3]
+bucket = "vaps-payloads"
+region = "us-east-1"
+endpoint = ""
+prefix = "payloads"
+force_path_style = false
+
+[storage.local]
+dir = "data"
+max_cache_bytes = "100GiB"

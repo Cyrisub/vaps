@@ -26,6 +26,13 @@ func IoHashDigestHex(hasher hash.Hash) string {
 	return hex.EncodeToString(sum[:IoHashSize])
 }
 
+// Blake3DigestHex returns the full BLAKE3-256 digest. FIoHash is intentionally
+// truncated for Unreal compatibility; callers that establish persistence use
+// this full digest to detect the otherwise theoretical FIoHash collision.
+func Blake3DigestHex(hasher hash.Hash) string {
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
 func IoHashValid(value string) bool {
 	if len(value) != IoHashHexSize {
 		return false

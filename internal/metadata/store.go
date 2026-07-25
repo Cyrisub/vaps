@@ -7,12 +7,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"go.etcd.io/bbolt"
 )
 
-var ErrNotFound = errors.New("metadata record not found")
+var (
+	ErrNotFound      = errors.New("metadata record not found")
+	ErrDashboardBusy = errors.New("dashboard query is already running")
+)
 
 const (
 	payloadBucket = "payloads"
@@ -21,66 +25,24 @@ const (
 type PayloadStatus uint8
 
 const (
-	StatusLocal  PayloadStatus = 1 << 0
-	StatusCache  PayloadStatus = 1 << 1
-	StatusBackup PayloadStatus = 1 << 2
+	// StatusStored means the object is durably present in S3 but not currently
+	// available from the local disk cache.
+	StatusStored PayloadStatus = iota
+	// StatusCached means the S3 object also has a local disk-cache entry.
+	StatusCached
 )
 
-type BackupStatus uint8
-
-const (
-	BackupNone BackupStatus = iota
-	BackupPending
-	Backuped
-	BackupFailed
-)
-
-func (s PayloadStatus) HasLocal() bool {
-	return s&StatusLocal != 0
-}
-
-func (s PayloadStatus) HasCache() bool {
-	return s&StatusCache != 0
-}
-
-func (s PayloadStatus) HasBackup() bool {
-	return s&StatusBackup != 0
-}
-
-func (s PayloadStatus) WithCache(enabled bool) PayloadStatus {
-	if enabled {
-		return s | StatusCache
-	}
-	return s &^ StatusCache
-}
-
-func (s PayloadStatus) WithBackup(enabled bool) PayloadStatus {
-	if enabled {
-		return s | StatusBackup
-	}
-	return s &^ StatusBackup
-}
-
-func (s BackupStatus) String() string {
-	switch s {
-	case BackupPending:
-		return "pending"
-	case Backuped:
-		return "backuped"
-	case BackupFailed:
-		return "failed"
-	default:
-		return "none"
-	}
+func (s PayloadStatus) IsCached() bool {
+	return s == StatusCached
 }
 
 type Payload struct {
-	Hash         string        `json:"hash"`
-	Size         int64         `json:"size"`
-	Status       PayloadStatus `json:"status"`
-	BackupStatus BackupStatus  `json:"backup_status,omitempty"`
-	CreatedAt    *time.Time    `json:"created_at"`
-	BackupedAt   *time.Time    `json:"backuped_at"`
+	Hash           string        `json:"hash"`
+	ContentHash    string        `json:"content_hash"`
+	Size           int64         `json:"size"`
+	Status         PayloadStatus `json:"status"`
+	CreatedAt      *time.Time    `json:"created_at"`
+	LastAccessedAt *time.Time    `json:"last_accessed_at,omitempty"`
 }
 
 type Stats struct {
@@ -111,6 +73,11 @@ type PayloadQueryResult struct {
 
 type Store struct {
 	db *bbolt.DB
+
+	dashboardMu       sync.RWMutex
+	dashboardPayloads map[string]Payload
+	dashboardQueryMu  sync.Mutex
+	dashboardQuerying bool
 }
 
 func Open(path string) (*Store, error) {
@@ -121,8 +88,12 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, dashboardPayloads: make(map[string]Payload)}
 	if err := store.init(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.loadDashboardIndex(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -134,7 +105,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) PutPayload(payload Payload) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(payloadBucket))
 		encoded, err := json.Marshal(payload)
 		if err != nil {
@@ -142,6 +113,13 @@ func (s *Store) PutPayload(payload Payload) error {
 		}
 		return bucket.Put([]byte(payload.Hash), encoded)
 	})
+	if err != nil {
+		return err
+	}
+	s.dashboardMu.Lock()
+	s.dashboardPayloads[payload.Hash] = payload
+	s.dashboardMu.Unlock()
+	return nil
 }
 
 func (s *Store) GetPayload(hash string) (Payload, error) {
@@ -162,24 +140,15 @@ func (s *Store) GetPayload(hash string) (Payload, error) {
 
 func (s *Store) Stats() (Stats, error) {
 	var stats Stats
-	err := s.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(payloadBucket))
-		return bucket.ForEach(func(_, value []byte) error {
-			var payload Payload
-			if err := json.Unmarshal(value, &payload); err != nil {
-				return err
-			}
-			stats.PayloadCount++
-			stats.TotalBytes += payload.Size
-			if payload.Status.HasCache() {
-				stats.CachedCount++
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		return Stats{}, err
+	s.dashboardMu.RLock()
+	for _, payload := range s.dashboardPayloads {
+		stats.PayloadCount++
+		stats.TotalBytes += payload.Size
+		if payload.Status.IsCached() {
+			stats.CachedCount++
+		}
 	}
+	s.dashboardMu.RUnlock()
 	return stats, nil
 }
 
@@ -189,24 +158,27 @@ func (s *Store) QueryPayloads(query PayloadQuery) (PayloadQueryResult, error) {
 	}
 	sortBy, sortOrder := normalizePayloadSort(query.SortBy, query.SortOrder)
 	result := PayloadQueryResult{Limit: query.Limit, Offset: query.Offset}
-	matched := make([]Payload, 0)
-	err := s.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(payloadBucket))
-		return bucket.ForEach(func(_, value []byte) error {
-			var payload Payload
-			if err := json.Unmarshal(value, &payload); err != nil {
-				return err
-			}
-			if !query.matches(payload) {
-				return nil
-			}
-			matched = append(matched, payload)
-			return nil
-		})
-	})
-	if err != nil {
-		return PayloadQueryResult{}, err
+	s.dashboardQueryMu.Lock()
+	if s.dashboardQuerying {
+		s.dashboardQueryMu.Unlock()
+		return PayloadQueryResult{}, ErrDashboardBusy
 	}
+	s.dashboardQuerying = true
+	s.dashboardQueryMu.Unlock()
+	defer func() {
+		s.dashboardQueryMu.Lock()
+		s.dashboardQuerying = false
+		s.dashboardQueryMu.Unlock()
+	}()
+
+	matched := make([]Payload, 0)
+	s.dashboardMu.RLock()
+	for _, payload := range s.dashboardPayloads {
+		if query.matches(payload) {
+			matched = append(matched, payload)
+		}
+	}
+	s.dashboardMu.RUnlock()
 	sortPayloads(matched, sortBy, sortOrder)
 	result.Total = int64(len(matched))
 	if query.Offset >= len(matched) {
@@ -281,17 +253,31 @@ func (s *Store) init() error {
 	})
 }
 
+func (s *Store) loadDashboardIndex() error {
+	return s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(payloadBucket))
+		return bucket.ForEach(func(_, value []byte) error {
+			var payload Payload
+			if err := json.Unmarshal(value, &payload); err != nil {
+				return err
+			}
+			s.dashboardPayloads[payload.Hash] = payload
+			return nil
+		})
+	})
+}
+
 func (q PayloadQuery) matches(payload Payload) bool {
 	if q.HashContains != "" && !strings.Contains(payload.Hash, q.HashContains) {
 		return false
 	}
-	if q.RequireLocal && !payload.Status.HasLocal() {
+	if q.RequireLocal && !payload.Status.IsCached() {
 		return false
 	}
-	if q.RequireCache && !payload.Status.HasCache() {
+	if q.RequireCache && !payload.Status.IsCached() {
 		return false
 	}
-	if q.Backup != nil && payload.Status.HasBackup() != *q.Backup {
+	if q.Backup != nil && !*q.Backup {
 		return false
 	}
 	if q.MinSize != nil && payload.Size < *q.MinSize {

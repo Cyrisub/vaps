@@ -20,9 +20,6 @@ type Options struct {
 	StatusLogInterval   time.Duration
 	CacheBytes          int64
 	CacheMaxObjectBytes int64
-	BackupBackends      []string
-	BackupFlushInterval time.Duration
-	BackupMaxPending    int
 	StartedAt           time.Time
 }
 

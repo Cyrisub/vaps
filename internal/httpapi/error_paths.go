@@ -11,8 +11,6 @@ func isMonitoredErrorPath(path string) bool {
 		return true
 	case strings.HasPrefix(path, "/v2/"):
 		return true
-	case strings.HasPrefix(path, "/v1/"):
-		return true
 	default:
 		return false
 	}

@@ -333,10 +333,9 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 			LogDir  string `json:"log_dir"`
 		} `json:"paths"`
 		Config struct {
-			CacheBytes           int64    `json:"cache_bytes"`
-			AuthExpireTime       string   `json:"auth_expire_time"`
-			UploadDirectMaxBytes int64    `json:"upload_direct_max_bytes"`
-			BackupBackends       []string `json:"backup_backends"`
+			CacheBytes           int64  `json:"cache_bytes"`
+			AuthExpireTime       string `json:"auth_expire_time"`
+			UploadDirectMaxBytes int64  `json:"upload_direct_max_bytes"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(infoResponse.Body.Bytes(), &info); err != nil {
@@ -363,9 +362,6 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 	if info.Config.CacheBytes <= 0 || info.Config.AuthExpireTime == "" || info.Config.UploadDirectMaxBytes <= 0 {
 		t.Fatalf("config incomplete: %#v", info.Config)
 	}
-	if bytes.Contains(infoResponse.Body.Bytes(), []byte("svn://")) || bytes.Contains(infoResponse.Body.Bytes(), []byte("http://svn")) {
-		t.Fatalf("info response leaked svn url")
-	}
 }
 
 func TestDashboardMetadataQuerySorts(t *testing.T) {
@@ -386,7 +382,7 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 		if err := meta.PutPayload(metadata.Payload{
 			Hash:      record.hash,
 			Size:      record.size,
-			Status:    metadata.StatusLocal,
+			Status:    metadata.StatusCached,
 			CreatedAt: &created,
 		}); err != nil {
 			t.Fatalf("PutPayload: %v", err)

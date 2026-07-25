@@ -112,9 +112,6 @@
       ]);
 
       const cfg = info.config || {};
-      const backends = Array.isArray(cfg.backup_backends) && cfg.backup_backends.length
-        ? cfg.backup_backends.join(", ")
-        : "none";
       fill("tile-config", [
         ["cache bytes", formatBytes(cfg.cache_bytes)],
         ["cache max object", formatBytes(cfg.cache_max_object_bytes)],
@@ -124,9 +121,6 @@
         ["upload cleanup", cfg.upload_cleanup_interval],
         ["status log interval", cfg.status_log_interval],
         ["log retention days", cfg.log_retention_days],
-        ["backup backends", backends],
-        ["backup flush", cfg.backup_flush_interval],
-        ["backup max pending", cfg.backup_max_pending],
       ]);
 
       document.getElementById("raw").textContent = JSON.stringify(info, null, 2);

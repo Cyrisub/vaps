@@ -51,17 +51,14 @@ type dashboardInfoPaths struct {
 }
 
 type dashboardInfoConfig struct {
-	CacheBytes            int64    `json:"cache_bytes"`
-	CacheMaxObjectBytes   int64    `json:"cache_max_object_bytes"`
-	AuthExpireTime        string   `json:"auth_expire_time"`
-	UploadDirectMaxBytes  int64    `json:"upload_direct_max_bytes"`
-	UploadExpiration      string   `json:"upload_expiration"`
-	UploadCleanupInterval string   `json:"upload_cleanup_interval"`
-	StatusLogInterval     string   `json:"status_log_interval"`
-	LogRetentionDays      int      `json:"log_retention_days"`
-	BackupBackends        []string `json:"backup_backends"`
-	BackupFlushInterval   string   `json:"backup_flush_interval"`
-	BackupMaxPending      int      `json:"backup_max_pending"`
+	CacheBytes            int64  `json:"cache_bytes"`
+	CacheMaxObjectBytes   int64  `json:"cache_max_object_bytes"`
+	AuthExpireTime        string `json:"auth_expire_time"`
+	UploadDirectMaxBytes  int64  `json:"upload_direct_max_bytes"`
+	UploadExpiration      string `json:"upload_expiration"`
+	UploadCleanupInterval string `json:"upload_cleanup_interval"`
+	StatusLogInterval     string `json:"status_log_interval"`
+	LogRetentionDays      int    `json:"log_retention_days"`
 }
 
 type dashboardInfoMemory struct {
@@ -91,11 +88,6 @@ func (h *Handler) collectDashboardInfo() dashboardInfoResponse {
 
 	executable, _ := os.Executable()
 	hostname, _ := os.Hostname()
-
-	backends := h.opts.BackupBackends
-	if backends == nil {
-		backends = []string{}
-	}
 
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
@@ -135,9 +127,6 @@ func (h *Handler) collectDashboardInfo() dashboardInfoResponse {
 			UploadCleanupInterval: h.opts.UploadCleanupInterval.String(),
 			StatusLogInterval:     h.opts.StatusLogInterval.String(),
 			LogRetentionDays:      h.opts.LogRetentionDays,
-			BackupBackends:        append([]string(nil), backends...),
-			BackupFlushInterval:   h.opts.BackupFlushInterval.String(),
-			BackupMaxPending:      h.opts.BackupMaxPending,
 		},
 		Memory: dashboardInfoMemory{
 			Alloc: mem.Alloc,

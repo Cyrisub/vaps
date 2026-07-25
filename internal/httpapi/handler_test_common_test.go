@@ -3,8 +3,8 @@ package httpapi_test
 import (
 	"testing"
 
-	"vaps/internal/utils"
 	"vaps/internal/metadata"
+	"vaps/internal/utils"
 )
 
 func ioHash(payload []byte) string {

@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"vaps/internal/auth"
-	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
 	"vaps/internal/metadata"
+	"vaps/internal/objectstore"
 	"vaps/internal/uploadsession"
 )
 
@@ -278,13 +278,13 @@ func TestV2TusUploadCompletes(t *testing.T) {
 	}
 }
 
-func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) http.Handler {
+func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, objects objectstore.Store) http.Handler {
 	t.Helper()
-	handler, _ := newV2HandlerWithAuth(t, meta, lru, backupBackend)
+	handler, _ := newV2HandlerWithAuth(t, meta, lru, objects)
 	return handler
 }
 
-func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) (http.Handler, *auth.Store) {
+func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, objects objectstore.Store) (http.Handler, *auth.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	authStore, err := auth.Open(filepath.Join(dir, "auth.db"), time.Minute)
@@ -297,7 +297,7 @@ func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, 
 		t.Fatalf("open uploads: %v", err)
 	}
 	t.Cleanup(func() { _ = uploads.Close() })
-	handler := httpapi.NewV2(blobstore.New(dir), meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+	handler := httpapi.NewV2(blobstore.New(dir), objects, meta, lru, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        time.Minute,
 		UploadDirectMaxBytes:  8 * 1024 * 1024,
 		UploadExpiration:      time.Hour,
@@ -313,9 +313,6 @@ func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, 
 		StatusLogInterval:     time.Minute,
 		CacheBytes:            64 * 1024 * 1024,
 		CacheMaxObjectBytes:   8 * 1024 * 1024,
-		BackupBackends:        []string{"none"},
-		BackupFlushInterval:   time.Minute,
-		BackupMaxPending:      32,
 		StartedAt:             time.Now().UTC().Add(-time.Second),
 	}).HTTPHandler()
 	return handler, authStore

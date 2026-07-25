@@ -14,20 +14,20 @@ import (
 	"time"
 
 	"vaps/internal/auth"
-	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpmeter"
 	"vaps/internal/metadata"
+	"vaps/internal/objectstore"
 	"vaps/internal/reqlog"
 	"vaps/internal/uploadsession"
 )
 
 type Handler struct {
 	store   *blobstore.Store
+	objects objectstore.Store
 	meta    *metadata.Store
 	cache   *cache.Cache
-	backup  backup.Backend
 	auth    *auth.Store
 	uploads *uploadsession.Store
 	reqlog  *reqlog.Store
@@ -52,11 +52,6 @@ type putResponse struct {
 	Hash   string `json:"hash"`
 	Size   int64  `json:"size"`
 	Stored bool   `json:"stored"`
-}
-
-type backupListResponse struct {
-	Items []backup.Object `json:"items"`
-	Total int             `json:"total"`
 }
 
 type dashboardStats struct {
@@ -130,11 +125,7 @@ func NewWithMetadataAndCache(store *blobstore.Store, meta *metadata.Store, lru *
 	return &Handler{store: store, meta: meta, cache: lru, opts: defaultOptions()}
 }
 
-func NewWithMetadataCacheAndBackup(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend) http.Handler {
-	return &Handler{store: store, meta: meta, cache: lru, backup: backupBackend, opts: defaultOptions()}
-}
-
-func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backupBackend backup.Backend, authStore *auth.Store, uploads *uploadsession.Store, opts Options) *Handler {
+func NewV2(store *blobstore.Store, objects objectstore.Store, meta *metadata.Store, lru *cache.Cache, authStore *auth.Store, uploads *uploadsession.Store, opts Options) *Handler {
 	if opts.AuthExpireTime <= 0 {
 		opts.AuthExpireTime = defaultOptions().AuthExpireTime
 	}
@@ -150,14 +141,11 @@ func NewV2(store *blobstore.Store, meta *metadata.Store, lru *cache.Cache, backu
 	if opts.StartedAt.IsZero() {
 		opts.StartedAt = time.Now().UTC()
 	}
-	if opts.BackupBackends == nil {
-		opts.BackupBackends = []string{}
-	}
 	return &Handler{
 		store:   store,
+		objects: objects,
 		meta:    meta,
 		cache:   lru,
-		backup:  backupBackend,
 		auth:    authStore,
 		uploads: uploads,
 		reqlog:  reqlog.New(10000),
@@ -215,9 +203,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/v2/metadata" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		h.metadataV2(w, r)
 	default:
-		if h.serveLegacyV1(w, r) {
-			return
-		}
 		http.NotFound(w, r)
 	}
 }
@@ -322,6 +307,10 @@ func (h *Handler) metadataQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.meta.QueryPayloads(query)
 	if err != nil {
+		if errors.Is(err, metadata.ErrDashboardBusy) {
+			http.Error(w, "dashboard query is busy", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -467,25 +456,19 @@ func parseNonNegativeInt64(value, name string) (int64, error) {
 }
 
 func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
-	backup := payload.BackupStatus
-	if backup == metadata.BackupNone && payload.Status.HasBackup() {
-		backup = metadata.Backuped
-	}
 	item := metadataQueryItem{
 		Hash:      payload.Hash,
 		Size:      payload.Size,
 		SizeHuman: formatHumanBytes(payload.Size),
 		Status:    payload.Status,
 		StatusFlags: metadataStatusFlags{
-			Local:  payload.Status.HasLocal(),
-			Cache:  payload.Status.HasCache(),
-			Backup: payload.Status.HasBackup(),
+			Local:  payload.Status.IsCached(),
+			Cache:  false,
+			Backup: true,
 		},
-		Backup:          backup.String(),
-		CreatedAt:       payload.CreatedAt,
-		CreatedAtHuman:  formatHumanTime(payload.CreatedAt),
-		BackupedAt:      payload.BackupedAt,
-		BackupedAtHuman: formatHumanTime(payload.BackupedAt),
+		Backup:         "backuped",
+		CreatedAt:      payload.CreatedAt,
+		CreatedAtHuman: formatHumanTime(payload.CreatedAt),
 	}
 	return item
 }
@@ -625,8 +608,12 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	info, err := h.store.Put(hash, r.Body)
+	info, err := h.putPayloadDurably(r.Context(), hash, r.Body)
 	if err != nil {
+		if errors.Is(err, objectstore.ErrIntegrityMismatch) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if errors.Is(err, blobstore.ErrInvalidHash) || errors.Is(err, blobstore.ErrHashMismatch) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -639,36 +626,9 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 	if info.Created {
 		status = http.StatusCreated
 	}
-	if h.meta != nil {
-		now := time.Now().UTC()
-		record, err := h.meta.GetPayload(info.Hash)
-		if errors.Is(err, metadata.ErrNotFound) {
-			record = metadata.Payload{
-				Hash:      info.Hash,
-				Size:      info.Size,
-				Status:    metadata.StatusLocal,
-				CreatedAt: &now,
-			}
-		} else if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		} else {
-			record.Size = info.Size
-			record.Status |= metadata.StatusLocal
-			if record.CreatedAt == nil {
-				record.CreatedAt = &now
-			}
-		}
-		if err := h.meta.PutPayload(record); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	if h.backup != nil {
-		if err := h.queueBackup(r.Context(), info.Hash); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if err := h.commitPayloadMetadata(info); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, status, putResponse{Hash: info.Hash, Size: info.Size, Stored: true})
 }
@@ -716,48 +676,6 @@ func (h *Handler) exists(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func (h *Handler) listBackupPayloads(w http.ResponseWriter, r *http.Request) {
-	if h.backup == nil {
-		http.Error(w, "backup backend is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	items, err := h.backup.List(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, backupListResponse{Items: items, Total: len(items)})
-}
-
-func (h *Handler) putBackupPayload(w http.ResponseWriter, r *http.Request) {
-	if h.backup == nil {
-		http.Error(w, "backup backend is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	hash, ok := queryHash(w, r)
-	if !ok {
-		return
-	}
-	exists, _, err := h.store.Exists(hash)
-	if h.meta != nil {
-		exists, _, err = h.existsWithMetadata(hash)
-	}
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	if !exists {
-		http.NotFound(w, r)
-		return
-	}
-	object, err := h.backupLocalPayload(r.Context(), hash)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, object)
-}
-
 func queryHash(w http.ResponseWriter, r *http.Request) (string, bool) {
 	hash := r.URL.Query().Get("iohash")
 	if !blobstore.ValidHash(hash) {
@@ -792,8 +710,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 }
 
 func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) {
-	record, err := h.meta.GetPayload(hash)
-	if errors.Is(err, metadata.ErrNotFound) {
+	record, err := h.payloadRecord(context.Background(), hash)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, blobstore.Info{}, nil
 	}
 	if err != nil {
@@ -805,22 +723,16 @@ func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) 
 		return false, blobstore.Info{}, err
 	}
 	if !exists {
-		if record.Status.HasBackup() {
-			return true, blobstore.Info{Hash: hash, Size: record.Size}, nil
-		}
-		return false, blobstore.Info{}, errLocalPayloadMissing
+		return true, blobstore.Info{Hash: hash, ContentHash: record.ContentHash, Size: record.Size}, nil
 	}
-	if record.Status.HasLocal() && info.Size != record.Size {
+	if info.Size != record.Size {
 		return false, blobstore.Info{}, errors.New("metadata size does not match local payload")
 	}
 	return true, info, nil
 }
 
 func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, error) {
-	record, err := h.meta.GetPayload(hash)
-	if errors.Is(err, metadata.ErrNotFound) {
-		return nil, blobstore.Info{}, os.ErrNotExist
-	}
+	record, err := h.payloadRecord(ctx, hash)
 	if err != nil {
 		return nil, blobstore.Info{}, err
 	}
@@ -829,68 +741,23 @@ func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.
 		return nil, blobstore.Info{}, err
 	}
 	if exists {
-		if record.Status.HasLocal() && info.Size != record.Size {
+		if info.Size != record.Size {
 			return nil, blobstore.Info{}, errors.New("metadata size does not match local payload")
 		}
 		reader, info, err := h.store.Open(hash)
 		return reader, info, err
 	}
-	if !record.Status.HasBackup() {
-		return nil, blobstore.Info{}, errLocalPayloadMissing
-	}
-	return h.restorePayloadFromBackup(ctx, hash)
-}
-
-func (h *Handler) restorePayloadFromBackup(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, error) {
-	if h.backup == nil {
+	if h.objects == nil {
 		return nil, blobstore.Info{}, os.ErrNotExist
 	}
-	backupReader, err := h.backup.Open(ctx, hash)
+	reader, remote, err := h.objects.Open(ctx, hash)
 	if err != nil {
+		if errors.Is(err, objectstore.ErrNotFound) {
+			return nil, blobstore.Info{}, os.ErrNotExist
+		}
 		return nil, blobstore.Info{}, err
 	}
-	defer backupReader.Close()
-	info, err := h.store.Put(hash, backupReader)
-	if err != nil {
-		return nil, blobstore.Info{}, err
-	}
-	h.markRestoredLocal(info)
-	return h.store.Open(hash)
-}
-
-func (h *Handler) queueBackup(ctx context.Context, hash string) error {
-	if queue, ok := h.backup.(backup.EnqueueBackend); ok {
-		h.markBackupPending(hash)
-		return queue.Enqueue(ctx, hash)
-	}
-	_, err := h.backupLocalPayload(ctx, hash)
-	return err
-}
-
-func (h *Handler) backupLocalPayload(ctx context.Context, hash string) (backup.Object, error) {
-	reader, _, err := h.store.Open(hash)
-	if err != nil {
-		return backup.Object{}, err
-	}
-	defer reader.Close()
-	object, err := h.backup.Put(ctx, hash, reader)
-	if err != nil {
-		return backup.Object{}, err
-	}
-	h.markBackuped(hash)
-	return object, nil
-}
-
-func (h *Handler) markBackupPending(hash string) {
-	if h.meta == nil {
-		return
-	}
-	record, err := h.meta.GetPayload(hash)
-	if err != nil {
-		return
-	}
-	record.BackupStatus = metadata.BackupPending
-	_ = h.meta.PutPayload(record)
+	return reader, blobstore.Info{Hash: remote.Hash, ContentHash: remote.ContentHash, Size: remote.Size}, nil
 }
 
 func (h *Handler) markCached(hash string) {
@@ -901,39 +768,7 @@ func (h *Handler) markCached(hash string) {
 	if err != nil {
 		return
 	}
-	record.Status = record.Status.WithCache(true)
-	_ = h.meta.PutPayload(record)
-}
-
-func (h *Handler) markRestoredLocal(info blobstore.Info) {
-	if h.meta == nil {
-		return
-	}
-	record, err := h.meta.GetPayload(info.Hash)
-	if err != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.Size = info.Size
-	record.Status |= metadata.StatusLocal
-	if record.CreatedAt == nil {
-		record.CreatedAt = &now
-	}
-	_ = h.meta.PutPayload(record)
-}
-
-func (h *Handler) markBackuped(hash string) {
-	if h.meta == nil {
-		return
-	}
-	record, err := h.meta.GetPayload(hash)
-	if err != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.Status = record.Status.WithBackup(true)
-	record.BackupStatus = metadata.Backuped
-	record.BackupedAt = &now
+	record.Status = metadata.StatusCached
 	_ = h.meta.PutPayload(record)
 }
 

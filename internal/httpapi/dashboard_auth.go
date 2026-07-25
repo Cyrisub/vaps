@@ -16,23 +16,23 @@ import (
 var authDashboardHTML string
 
 type authQueryItem struct {
-	HashPrefix      string            `json:"hash_prefix"`
-	TokenHash       string            `json:"token_hash"`
-	ClientID        string            `json:"client_id"`
-	RemoteIP        string            `json:"remote_ip"`
-	UserAgent       string            `json:"user_agent"`
-	UserAgentInfo   ParsedUserAgent   `json:"user_agent_info"`
-	ClientInfo      map[string]string `json:"client_info"`
-	Status          string            `json:"status"`
-	CreatedAt       time.Time         `json:"created_at"`
-	CreatedAtHuman  string            `json:"created_at_human"`
-	ExpiresAt       time.Time         `json:"expires_at"`
-	ExpiresAtHuman  string            `json:"expires_at_human"`
-	ParkedAt        *time.Time        `json:"parked_at,omitempty"`
-	ParkedAtHuman   string            `json:"parked_at_human,omitempty"`
-	RevokedAt       *time.Time        `json:"revoked_at,omitempty"`
-	RevokedAtHuman  string            `json:"revoked_at_human,omitempty"`
-	ErrorCount      int64             `json:"error_count"`
+	HashPrefix     string            `json:"hash_prefix"`
+	TokenHash      string            `json:"token_hash"`
+	ClientID       string            `json:"client_id"`
+	RemoteIP       string            `json:"remote_ip"`
+	UserAgent      string            `json:"user_agent"`
+	UserAgentInfo  ParsedUserAgent   `json:"user_agent_info"`
+	ClientInfo     map[string]string `json:"client_info"`
+	Status         string            `json:"status"`
+	CreatedAt      time.Time         `json:"created_at"`
+	CreatedAtHuman string            `json:"created_at_human"`
+	ExpiresAt      time.Time         `json:"expires_at"`
+	ExpiresAtHuman string            `json:"expires_at_human"`
+	ParkedAt       *time.Time        `json:"parked_at,omitempty"`
+	ParkedAtHuman  string            `json:"parked_at_human,omitempty"`
+	RevokedAt      *time.Time        `json:"revoked_at,omitempty"`
+	RevokedAtHuman string            `json:"revoked_at_human,omitempty"`
+	ErrorCount     int64             `json:"error_count"`
 }
 
 type authQueryResponse struct {

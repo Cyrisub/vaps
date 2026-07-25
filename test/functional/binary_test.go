@@ -2,11 +2,15 @@ package functional_test
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +28,7 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	}
 
 	root := t.TempDir()
+	s3 := newBinaryS3Server(t)
 	dataDir := filepath.Join(root, "data")
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -45,7 +50,12 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 		"--data-dir", dataDir,
 		"--log-dir", logDir,
 		"--status-log-interval", "0s",
+		"--storage-s3-bucket", "functional-test",
+		"--storage-s3-region", "us-east-1",
+		"--storage-s3-endpoint", s3.URL,
+		"--storage-s3-force-path-style=true",
 	)
+	cmd.Env = append(os.Environ(), "AWS_ACCESS_KEY_ID=functional-test", "AWS_SECRET_ACCESS_KEY=functional-test")
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatalf("stderr pipe: %v", err)
@@ -89,6 +99,64 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	requireStatus(t, pull, http.StatusOK)
 	if !bytes.Equal(readBody(t, pull), payload) {
 		t.Fatalf("pull body mismatch from binary process")
+	}
+}
+
+type binaryS3Server struct {
+	*httptest.Server
+	mu      sync.Mutex
+	objects map[string]binaryS3Object
+}
+
+type binaryS3Object struct {
+	data     []byte
+	metadata http.Header
+}
+
+func newBinaryS3Server(t *testing.T) *binaryS3Server {
+	t.Helper()
+	fake := &binaryS3Server{objects: map[string]binaryS3Object{}}
+	fake.Server = httptest.NewServer(http.HandlerFunc(fake.serveHTTP))
+	t.Cleanup(fake.Close)
+	return fake
+}
+
+func (s *binaryS3Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Path
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch r.Method {
+	case http.MethodPut:
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		metadata := make(http.Header)
+		for _, name := range []string{"X-Amz-Meta-Vaps-Iohash", "X-Amz-Meta-Vaps-Blake3", "X-Amz-Meta-Vaps-Size"} {
+			metadata.Set(name, r.Header.Get(name))
+		}
+		s.objects[key] = binaryS3Object{data: data, metadata: metadata}
+		w.WriteHeader(http.StatusOK)
+	case http.MethodHead, http.MethodGet:
+		object, ok := s.objects[key]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		for name, values := range object.metadata {
+			for _, value := range values {
+				w.Header().Add(name, value)
+			}
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(object.data)))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(object.data)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 

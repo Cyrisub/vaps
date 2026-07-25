@@ -16,11 +16,11 @@ import (
 
 	"vaps/internal/appconfig"
 	"vaps/internal/auth"
-	"vaps/internal/backup"
 	"vaps/internal/blobstore"
 	"vaps/internal/cache"
 	"vaps/internal/httpapi"
 	"vaps/internal/metadata"
+	"vaps/internal/objectstore"
 	"vaps/internal/uploadsession"
 	"vaps/internal/utils"
 )
@@ -63,13 +63,19 @@ func run() int {
 	}
 	defer meta.Close()
 
-	store := blobstore.New(cfg.DataDir)
-	lru := cache.New(cfg.Cache.Bytes.Int64(), cfg.Cache.MaxObjectBytes.Int64())
-	backupBackend, err := setupBackup(ctx, cfg, store, meta)
+	store := blobstore.NewWithMaxBytes(cfg.Storage.Local.Dir, cfg.Storage.Local.MaxCacheBytes.Int64())
+	objects, err := objectstore.NewS3(ctx, objectstore.S3Config{
+		Bucket:         cfg.Storage.S3.Bucket,
+		Region:         cfg.Storage.S3.Region,
+		Endpoint:       cfg.Storage.S3.Endpoint,
+		Prefix:         cfg.Storage.S3.Prefix,
+		ForcePathStyle: cfg.Storage.S3.ForcePathStyle,
+	})
 	if err != nil {
 		log.Print(err)
 		return 1
 	}
+	lru := cache.New(cfg.Cache.Bytes.Int64(), cfg.Cache.MaxObjectBytes.Int64())
 	authStore, err := auth.Open(cfg.AuthDB, time.Duration(cfg.Auth.ExpireTime))
 	if err != nil {
 		log.Print(err)
@@ -84,7 +90,7 @@ func run() int {
 	defer uploads.Close()
 	startUploadCleanup(ctx, uploads, time.Duration(cfg.Upload.CleanupInterval))
 	startedAt := time.Now().UTC()
-	handler := httpapi.NewV2(store, meta, lru, backupBackend, authStore, uploads, httpapi.Options{
+	handler := httpapi.NewV2(store, objects, meta, lru, authStore, uploads, httpapi.Options{
 		AuthExpireTime:        time.Duration(cfg.Auth.ExpireTime),
 		UploadDirectMaxBytes:  cfg.Upload.DirectMaxBytes.Int64(),
 		UploadExpiration:      time.Duration(cfg.Upload.Expiration),
@@ -100,9 +106,6 @@ func run() int {
 		StatusLogInterval:     time.Duration(cfg.StatusLogInterval),
 		CacheBytes:            cfg.Cache.Bytes.Int64(),
 		CacheMaxObjectBytes:   cfg.Cache.MaxObjectBytes.Int64(),
-		BackupBackends:        appconfig.EnabledBackupBackends(cfg.Backup.Backend),
-		BackupFlushInterval:   time.Duration(cfg.Backup.FlushInterval),
-		BackupMaxPending:      cfg.Backup.MaxPending,
 		StartedAt:             startedAt,
 	}).HTTPHandler()
 	startStatusLogger(ctx, time.Duration(cfg.StatusLogInterval), meta, lru)
@@ -132,152 +135,8 @@ func run() int {
 			return 1
 		}
 	}
-	flushBackup(backupBackend)
 	exitCode = 0
 	return exitCode
-}
-
-func setupBackup(ctx context.Context, cfg appconfig.Config, store *blobstore.Store, meta *metadata.Store) (backup.Backend, error) {
-	backends := appconfig.EnabledBackupBackends(cfg.Backup.Backend)
-	if len(backends) == 0 {
-		return nil, nil
-	}
-	if len(backends) > 1 {
-		return nil, fmt.Errorf("multiple backup backends are not supported yet: %v", backends)
-	}
-
-	var backend backup.Backend
-	switch backends[0] {
-	case "svn":
-		created, err := backup.NewSVNBackend(backup.SVNConfig{
-			URL:        cfg.Backup.SVN.URL,
-			SVNBin:     cfg.Backup.SVN.Bin,
-			SVNMuccBin: cfg.Backup.SVN.MuccBin,
-		})
-		if err != nil {
-			return nil, err
-		}
-		backend = created
-	default:
-		return nil, fmt.Errorf("unsupported backup backend %q", backends[0])
-	}
-	metadataBackend := backup.NewEmptyMetadataBackend(backend)
-	startBackupMetadataRefresh(ctx, meta, metadataBackend)
-	queue := backup.NewQueue(metadataBackend, func(hash string) (io.ReadCloser, error) {
-		reader, _, err := store.Open(hash)
-		return reader, err
-	}, backup.QueueConfig{
-		Interval:   time.Duration(cfg.Backup.FlushInterval),
-		MaxPending: cfg.Backup.MaxPending,
-	}, backup.QueueCallbacks{
-		OnPending:  func(hash string) { markBackupPending(meta, hash) },
-		OnBackuped: func(hash string) { markBackuped(meta, hash) },
-		OnFailed:   func(hash string, err error) { markBackupFailed(meta, hash, err) },
-	})
-	queue.Start(ctx)
-	return queue, nil
-}
-
-func startBackupMetadataRefresh(ctx context.Context, meta *metadata.Store, backend *backup.MetadataBackend) {
-	go func() {
-		started := time.Now()
-		log.Printf("backup metadata refresh started backend=%q", backend.Name())
-		if err := backend.Refresh(ctx); err != nil {
-			log.Printf("backup metadata refresh failed backend=%q duration=%s error=%q", backend.Name(), time.Since(started).Truncate(time.Millisecond), err)
-			return
-		}
-		if err := mergeBackupMetadata(ctx, meta, backend); err != nil {
-			log.Printf("backup metadata merge failed backend=%q duration=%s error=%q", backend.Name(), time.Since(started).Truncate(time.Millisecond), err)
-			return
-		}
-		log.Printf("backup metadata refresh completed backend=%q count=%d duration=%s", backend.Name(), backend.Count(), time.Since(started).Truncate(time.Millisecond))
-	}()
-}
-
-func mergeBackupMetadata(ctx context.Context, meta *metadata.Store, backend backup.Backend) error {
-	if meta == nil || backend == nil {
-		return nil
-	}
-	objects, err := backend.List(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	for _, object := range objects {
-		record, err := meta.GetPayload(object.Hash)
-		if errors.Is(err, metadata.ErrNotFound) {
-			if err := meta.PutPayload(metadata.Payload{
-				Hash:         object.Hash,
-				Status:       metadata.StatusBackup,
-				BackupStatus: metadata.Backuped,
-				BackupedAt:   &now,
-			}); err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if record.Status.HasBackup() && record.BackupStatus == metadata.Backuped {
-			continue
-		}
-		record.Status = record.Status.WithBackup(true)
-		record.BackupStatus = metadata.Backuped
-		if record.BackupedAt == nil {
-			record.BackupedAt = &now
-		}
-		if err := meta.PutPayload(record); err != nil {
-			return err
-		}
-	}
-	log.Printf("backup metadata merged records=%d", len(objects))
-	return nil
-}
-
-func flushBackup(backend backup.Backend) {
-	flusher, ok := backend.(interface {
-		Flush(context.Context) ([]backup.Object, error)
-	})
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := flusher.Flush(ctx); err != nil {
-		log.Printf("backup final flush failed error=%q", err)
-	}
-}
-
-func markBackupPending(meta *metadata.Store, hash string) {
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		return
-	}
-	record.BackupStatus = metadata.BackupPending
-	_ = meta.PutPayload(record)
-}
-
-func markBackuped(meta *metadata.Store, hash string) {
-	record, err := meta.GetPayload(hash)
-	if err != nil {
-		return
-	}
-	now := time.Now().UTC()
-	record.Status = record.Status.WithBackup(true)
-	record.BackupStatus = metadata.Backuped
-	record.BackupedAt = &now
-	_ = meta.PutPayload(record)
-}
-
-func markBackupFailed(meta *metadata.Store, hash string, err error) {
-	log.Printf("backup payload failed hash=%s error=%q", hash, err)
-	record, getErr := meta.GetPayload(hash)
-	if getErr != nil {
-		return
-	}
-	record.BackupStatus = metadata.BackupFailed
-	_ = meta.PutPayload(record)
 }
 
 func setupLogging(cfg appconfig.Config) (io.WriteCloser, error) {

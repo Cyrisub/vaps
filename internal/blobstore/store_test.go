@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"vaps/internal/blobstore"
+	"vaps/internal/utils"
 )
 
 const helloHash = "ea8f163db38682925e4491c5e58d4bb3506ef8c1"
@@ -134,6 +135,29 @@ func TestPutCleansTemporaryFileOnReadError(t *testing.T) {
 	}
 	if len(tmpEntries) != 0 {
 		t.Fatalf("tmp contains %d entries, want 0", len(tmpEntries))
+	}
+}
+
+func TestStoreEvictsOldestCacheEntryAboveLimit(t *testing.T) {
+	root := t.TempDir()
+	store := blobstore.NewWithMaxBytes(root, 5)
+	if _, err := store.Put(helloHash, strings.NewReader("hello")); err != nil {
+		t.Fatalf("put first payload: %v", err)
+	}
+	secondHash := utils.IoHashSumHex([]byte("world!!"))
+	if _, err := store.Put(secondHash, strings.NewReader("world!!")); err != nil {
+		t.Fatalf("put second payload: %v", err)
+	}
+	firstExists, _, err := store.Exists(helloHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondExists, _, err := store.Exists(secondHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstExists || secondExists {
+		t.Fatalf("oversized cache entries must be evicted, got first=%t second=%t", firstExists, secondExists)
 	}
 }
 
