@@ -31,6 +31,7 @@
 
   var NAV = [
     { href: "/dashboard", page: "overview", label: "Overview" },
+    { href: "/dashboard/?page=sessions&status=all", page: "sessions", label: "Sessions" },
     { href: "/dashboard/errors", page: "errors", label: "Errors" },
     { href: "/dashboard/metadata", page: "metadata", label: "Payloads" },
     { href: "/dashboard/auth", page: "auth", label: "Auth" },

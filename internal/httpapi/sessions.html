@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VAPS Runtime Sessions</title>
+  <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+  <script src="/dashboard/static/dashboard.js" defer></script>
+  <style>
+    form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+    table { min-width: 760px; }
+    .session-row { cursor: pointer; }
+    .session-row:hover td { background: var(--theme_p4); }
+    .session-row.selected td { background: var(--theme_g2); }
+    .session-log { margin-top: 16px; }
+    .session-log-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+    .session-log-toolbar label { min-width: 150px; }
+    .session-log-toolbar button { width: auto; }
+    .log-view { max-height: 560px; overflow: auto; padding: 0; }
+    .log-line { display: grid; grid-template-columns: 180px 70px 1fr; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--theme_border_subtle); white-space: pre-wrap; word-break: break-word; }
+    .log-line:last-child { border-bottom: none; }
+    .log-time { color: var(--theme_faint); }
+    .log-level { font-weight: 700; }
+    .log-level-WARN { color: var(--theme_warn); }
+    .log-level-ERROR { color: var(--theme_fail); }
+    @media (max-width: 760px) {
+      form { grid-template-columns: 1fr; }
+      .log-line { grid-template-columns: 1fr; gap: 2px; }
+    }
+  </style>
+</head>
+<body data-page="sessions">
+  <section class="vaps-sector">
+    <h1>Runtime Sessions</h1>
+    <p class="subtitle">Read-only views over the existing daily log files. A session runs from startup to stopped.</p>
+  </section>
+
+  <section class="vaps-sector">
+    <div class="history-tabs">
+      <button id="active-tab" type="button">Active</button>
+      <button id="ended-tab" type="button">Ended</button>
+      <button id="all-tab" type="button">All</button>
+    </div>
+    <div class="panel">
+      <form id="session-filters">
+        <label>Session contains
+          <input id="session-q" type="search" autocomplete="off" placeholder="session id">
+        </label>
+        <label>Rows per page
+          <input id="session-limit" type="number" min="1" max="500" value="100">
+        </label>
+        <button type="submit">Search</button>
+      </form>
+    </div>
+    <div class="panel">
+      <div class="toolbar">
+        <p class="hint" id="session-summary">Loading sessions...</p>
+        <div class="pager">
+          <button id="session-prev" type="button">Previous</button>
+          <button id="session-next" type="button">Next</button>
+        </div>
+      </div>
+      <p class="error" id="session-error"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Status</th><th>Started</th><th>Ended</th><th>Exit</th><th>Log entries</th><th>ID</th></tr></thead>
+          <tbody id="session-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="vaps-sector session-log" id="log-section" hidden>
+    <h2>Session Log</h2>
+    <div class="panel">
+      <div class="session-log-toolbar">
+        <label>Level
+          <select id="log-level">
+            <option value="">All levels</option><option value="info">Info</option>
+            <option value="warn">Warn</option><option value="error">Error</option>
+          </select>
+        </label>
+        <label>Text contains
+          <input id="log-q" type="search" autocomplete="off" placeholder="quick filter">
+        </label>
+        <button id="log-order" type="button">Newest first</button>
+        <button id="log-prev" type="button">Previous</button>
+        <button id="log-next" type="button">Next</button>
+      </div>
+      <p class="hint" id="log-summary">Select a session to view its log.</p>
+      <p class="error" id="log-error"></p>
+      <div class="table-wrap log-view" id="log-rows"></div>
+    </div>
+  </section>
+
+  <script>
+    const sessionState = { status: new URLSearchParams(location.search).get("status") || "all", offset: 0, selected: "" };
+    const logState = { offset: 0, order: "newest" };
+    const $ = (id) => document.getElementById(id);
+    const formatDate = (value) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(value)) : "-";
+    const text = (value) => value == null ? "" : String(value);
+
+    function sessionParams() {
+      const params = new URLSearchParams({ status: sessionState.status, offset: String(sessionState.offset), limit: $("session-limit").value || "100" });
+      if ($("session-q").value.trim()) params.set("q", $("session-q").value.trim());
+      return params;
+    }
+
+    async function loadSessions() {
+      $("session-error").textContent = "";
+      const response = await fetch(`/dashboard/sessions/query?${sessionParams()}`);
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json();
+      const rows = $("session-rows");
+      rows.replaceChildren();
+      for (const item of data.items || []) {
+        const row = document.createElement("tr");
+        row.className = "session-row" + (item.id === sessionState.selected ? " selected" : "");
+        const values = [item.status, formatDate(item.started_at), formatDate(item.ended_at), item.exit_code == null ? "-" : item.exit_code, item.log_count, item.id];
+        for (const value of values) { const cell = document.createElement("td"); cell.textContent = text(value); row.appendChild(cell); }
+        row.addEventListener("click", () => selectSession(item.id));
+        rows.appendChild(row);
+      }
+      if (!rows.children.length) {
+        const row = document.createElement("tr"), cell = document.createElement("td");
+        cell.colSpan = 6; cell.className = "hint"; cell.textContent = "No runtime sessions matched the query.";
+        row.appendChild(cell); rows.appendChild(row);
+      }
+      const limit = data.limit || 100;
+      $("session-summary").textContent = `Showing ${data.total ? data.offset + 1 : 0}-${data.offset + (data.items || []).length} of ${data.total} sessions`;
+      $("session-prev").disabled = data.offset <= 0;
+      $("session-next").disabled = data.offset + limit >= data.total;
+      for (const status of ["active", "ended", "all"]) $(status + "-tab").classList.toggle("active", sessionState.status === status);
+    }
+
+    function logParams() {
+      const params = new URLSearchParams({ session_id: sessionState.selected, offset: String(logState.offset), limit: "500", order: logState.order });
+      if ($("log-level").value) params.set("level", $("log-level").value);
+      if ($("log-q").value.trim()) params.set("q", $("log-q").value.trim());
+      return params;
+    }
+
+    async function loadLog() {
+      $("log-error").textContent = "";
+      const response = await fetch(`/dashboard/sessions/log?${logParams()}`);
+      if (!response.ok) throw new Error(await response.text());
+      const data = await response.json(), body = $("log-rows");
+      body.replaceChildren();
+      for (const item of data.items || []) {
+        const line = document.createElement("div"); line.className = "log-line";
+        for (const [value, className] of [[formatDate(item.timestamp), "log-time"], [item.level, "log-level log-level-" + item.level], [item.message, "log-message"]]) {
+          const span = document.createElement("span"); span.className = className; span.textContent = text(value); line.appendChild(span);
+        }
+        body.appendChild(line);
+      }
+      if (!body.children.length) body.textContent = "No log entries matched the query.";
+      const limit = data.limit || 500;
+      $("log-summary").textContent = `Showing ${data.total ? data.offset + 1 : 0}-${data.offset + (data.items || []).length} of ${data.total} log entries`;
+      $("log-prev").disabled = data.offset <= 0;
+      $("log-next").disabled = data.offset + limit >= data.total;
+      $("log-order").textContent = logState.order === "newest" ? "Newest first" : "Oldest first";
+    }
+
+    async function selectSession(id) {
+      sessionState.selected = id; logState.offset = 0; $("log-section").hidden = false;
+      await Promise.all([loadSessions(), loadLog()]);
+    }
+
+    $("session-filters").addEventListener("submit", (event) => { event.preventDefault(); sessionState.offset = 0; loadSessions().catch(e => $("session-error").textContent = e.message); });
+    for (const status of ["active", "ended", "all"]) $(""+status+"-tab").addEventListener("click", () => { sessionState.status = status; sessionState.offset = 0; history.replaceState(null, "", `?page=sessions&status=${status}`); loadSessions().catch(e => $("session-error").textContent = e.message); });
+    $("session-prev").addEventListener("click", () => { sessionState.offset -= Number($("session-limit").value) || 100; loadSessions().catch(e => $("session-error").textContent = e.message); });
+    $("session-next").addEventListener("click", () => { sessionState.offset += Number($("session-limit").value) || 100; loadSessions().catch(e => $("session-error").textContent = e.message); });
+    $("log-level").addEventListener("change", () => { logState.offset = 0; loadLog().catch(e => $("log-error").textContent = e.message); });
+    $("log-q").addEventListener("input", () => { logState.offset = 0; loadLog().catch(e => $("log-error").textContent = e.message); });
+    $("log-order").addEventListener("click", () => { logState.order = logState.order === "newest" ? "oldest" : "newest"; logState.offset = 0; loadLog().catch(e => $("log-error").textContent = e.message); });
+    $("log-prev").addEventListener("click", () => { logState.offset = Math.max(0, logState.offset - 500); loadLog().catch(e => $("log-error").textContent = e.message); });
+    $("log-next").addEventListener("click", () => { logState.offset += 500; loadLog().catch(e => $("log-error").textContent = e.message); });
+    loadSessions().catch(e => $("session-error").textContent = e.message);
+  </script>
+</body>
+</html>

@@ -108,6 +108,52 @@ func TestDashboardAuthAndErrorsPages(t *testing.T) {
 	}
 }
 
+func TestDashboardSessionsPageAndQueries(t *testing.T) {
+	handler := newV2Handler(t, openMetadata(t), nil, nil)
+
+	for _, path := range []string{
+		"/dashboard/sessions",
+		"/dashboard/?page=sessions&status=all",
+	} {
+		page := httptest.NewRecorder()
+		handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, path, nil))
+		if page.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", path, page.Code)
+		}
+		if !bytes.Contains(page.Body.Bytes(), []byte("Runtime Sessions")) {
+			t.Fatalf("%s missing sessions title", path)
+		}
+	}
+
+	sessions := httptest.NewRecorder()
+	handler.ServeHTTP(sessions, httptest.NewRequest(http.MethodGet, "/dashboard/sessions/query?status=all", nil))
+	if sessions.Code != http.StatusOK {
+		t.Fatalf("sessions query status = %d, want 200", sessions.Code)
+	}
+	var sessionResult struct {
+		Items []any `json:"items"`
+		Total int   `json:"total"`
+	}
+	if err := json.Unmarshal(sessions.Body.Bytes(), &sessionResult); err != nil {
+		t.Fatalf("decode sessions query: %v", err)
+	}
+	if sessionResult.Total != 0 || len(sessionResult.Items) != 0 {
+		t.Fatalf("empty sessions result = %#v", sessionResult)
+	}
+
+	badStatus := httptest.NewRecorder()
+	handler.ServeHTTP(badStatus, httptest.NewRequest(http.MethodGet, "/dashboard/sessions/query?status=unknown", nil))
+	if badStatus.Code != http.StatusBadRequest {
+		t.Fatalf("bad sessions status = %d, want 400", badStatus.Code)
+	}
+
+	missingID := httptest.NewRecorder()
+	handler.ServeHTTP(missingID, httptest.NewRequest(http.MethodGet, "/dashboard/sessions/log", nil))
+	if missingID.Code != http.StatusBadRequest {
+		t.Fatalf("missing session id status = %d, want 400", missingID.Code)
+	}
+}
+
 func TestDashboardSharedShellAssets(t *testing.T) {
 	handler := newV2Handler(t, openMetadata(t), nil, nil)
 
@@ -143,6 +189,9 @@ func TestDashboardSharedShellAssets(t *testing.T) {
 	if !bytes.Contains(js.Body.Bytes(), []byte("Payloads")) {
 		t.Fatalf("dashboard.js missing Payloads nav label")
 	}
+	if !bytes.Contains(js.Body.Bytes(), []byte("Sessions")) {
+		t.Fatalf("dashboard.js missing Sessions nav label")
+	}
 	if !bytes.Contains(js.Body.Bytes(), []byte("Info")) {
 		t.Fatalf("dashboard.js missing Info nav label")
 	}
@@ -167,7 +216,7 @@ func TestDashboardSharedShellAssets(t *testing.T) {
 		prev = idx
 	}
 
-	for _, path := range []string{"/dashboard", "/dashboard/metadata", "/dashboard/auth", "/dashboard/errors", "/dashboard/telemetry", "/dashboard/info"} {
+	for _, path := range []string{"/dashboard", "/dashboard/sessions", "/dashboard/metadata", "/dashboard/auth", "/dashboard/errors", "/dashboard/telemetry", "/dashboard/info"} {
 		page := httptest.NewRecorder()
 		handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, path, nil))
 		if page.Code != http.StatusOK {
@@ -192,6 +241,9 @@ func TestDashboardSharedShellAssets(t *testing.T) {
 	}
 	if !bytes.Contains(overview.Body.Bytes(), []byte("/dashboard/telemetry")) {
 		t.Fatalf("overview missing telemetry link")
+	}
+	if !bytes.Contains(overview.Body.Bytes(), []byte("/dashboard/?page=sessions&status=all")) {
+		t.Fatalf("overview missing sessions link")
 	}
 }
 

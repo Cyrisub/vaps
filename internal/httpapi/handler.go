@@ -158,8 +158,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/health":
 		h.health(w)
-	case r.Method == http.MethodGet && r.URL.Path == "/dashboard":
-		h.dashboard(w)
+	case r.Method == http.MethodGet && (r.URL.Path == "/dashboard" || r.URL.Path == "/dashboard/"):
+		if r.URL.Query().Get("page") == "sessions" {
+			h.sessionsDashboard(w)
+		} else {
+			h.dashboard(w)
+		}
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/sessions":
+		h.sessionsDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/static/dashboard.css":
 		h.dashboardStaticCSS(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/static/dashboard.js":
@@ -170,6 +176,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.metadataDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/query":
 		h.metadataQuery(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/sessions/query":
+		h.sessionsQuery(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/sessions/log":
+		h.sessionLogQuery(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/auth":
 		h.authDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/auth/query":
