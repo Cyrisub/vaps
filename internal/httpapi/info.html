@@ -112,16 +112,21 @@
       ]);
 
       const cfg = info.config || {};
-      fill("tile-config", [
-        ["cache bytes", formatBytes(cfg.cache_bytes)],
-        ["cache max object", formatBytes(cfg.cache_max_object_bytes)],
+      const configRows = [
         ["auth expire", cfg.auth_expire_time],
         ["upload direct max", formatBytes(cfg.upload_direct_max_bytes)],
         ["upload expiration", cfg.upload_expiration],
         ["upload cleanup", cfg.upload_cleanup_interval],
         ["status log interval", cfg.status_log_interval],
         ["log retention days", cfg.log_retention_days],
-      ]);
+      ];
+      if (Object.prototype.hasOwnProperty.call(cfg, "cache_bytes")) {
+        configRows.unshift(
+          ["cache bytes", formatBytes(cfg.cache_bytes)],
+          ["cache max object", formatBytes(cfg.cache_max_object_bytes)]
+        );
+      }
+      fill("tile-config", configRows);
 
       document.getElementById("raw").textContent = JSON.stringify(info, null, 2);
     };

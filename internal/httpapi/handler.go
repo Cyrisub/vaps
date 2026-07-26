@@ -56,7 +56,7 @@ type putResponse struct {
 
 type dashboardStats struct {
 	Metadata metadata.Stats  `json:"metadata"`
-	Cache    cache.Stats     `json:"cache"`
+	Cache    *cache.Stats    `json:"cache,omitempty"`
 	Auth     auth.Stats      `json:"auth"`
 	Errors   reqlog.Stats    `json:"errors"`
 	HTTP     httpmeter.Stats `json:"http"`
@@ -563,14 +563,13 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 		} else {
 			reader, info, err = h.openPayloadWithMetadata(r.Context(), hash)
 		}
+	} else if cached, ok := h.cache.Get(hash); ok {
+		info = blobstore.Info{Hash: hash, Size: int64(len(cached))}
+		setPayloadHeaders(w, info)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(cached)
+		return
 	} else {
-		if cached, ok := h.cache.Get(hash); ok {
-			info = blobstore.Info{Hash: hash, Size: int64(len(cached))}
-			setPayloadHeaders(w, info)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(cached)
-			return
-		}
 		reader, info, err = h.store.Open(hash)
 	}
 	if err != nil {
@@ -589,7 +588,7 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 
 	setPayloadHeaders(w, info)
 	w.WriteHeader(http.StatusOK)
-	if h.cache.CanStore(info.Size) {
+	if h.cache != nil && h.cache.CanStore(info.Size) {
 		data, readErr := io.ReadAll(reader)
 		if readErr != nil {
 			return
@@ -781,7 +780,10 @@ func (h *Handler) collectDashboardStats() (dashboardStats, error) {
 		}
 		stats.Metadata = metadataStats
 	}
-	stats.Cache = h.cache.Stats()
+	if h.cache.Enabled() {
+		cacheStats := h.cache.Stats()
+		stats.Cache = &cacheStats
+	}
 	if h.auth != nil {
 		authStats, err := h.auth.Stats()
 		if err != nil {

@@ -66,13 +66,13 @@
         <p class="value" id="cached-count">0</p>
         <p class="hint">metadata marked cache-resident</p>
       </article>
-      <a class="stats-tile clickable detailed" href="/dashboard/telemetry#cache">
+      <a class="stats-tile clickable detailed" id="cache-summary-usage" href="/dashboard/telemetry#cache" hidden>
         <p class="label">Cache Usage</p>
         <p class="value"><span id="cache-used">0 B</span> / <span id="cache-max">0 B</span></p>
         <div class="meter" aria-label="cache usage"><span id="cache-meter"></span></div>
         <p class="hint"><span id="cache-percent">0.0</span>% used · <span id="cache-entries">0</span> entries</p>
       </a>
-      <a class="stats-tile clickable detailed" href="/dashboard/telemetry#cache">
+      <a class="stats-tile clickable detailed" id="cache-summary-hit-rate" href="/dashboard/telemetry#cache" hidden>
         <p class="label">Hit Rate</p>
         <p class="value"><span id="hit-rate">0.0</span>%</p>
         <p class="hint"><span id="cache-hits">0</span> hits / <span id="cache-misses">0</span> misses</p>
@@ -94,7 +94,7 @@
     </div>
   </section>
 
-  <section class="vaps-sector">
+  <section class="vaps-sector" id="cache-details" hidden>
     <div class="vaps-sector-header">
       <h2>Cache Details</h2>
       <span class="hint">max object: <span id="cache-max-object">0 B</span></span>
@@ -160,6 +160,7 @@
       const stats = await response.json();
       const metadata = stats.metadata || {};
       const cache = stats.cache || {};
+      const cacheEnabled = Boolean(stats.cache);
       const authStats = stats.auth || {};
       const errors = stats.errors || {};
       const http = stats.http || {};
@@ -183,15 +184,6 @@
           payloads: metadata.payload_count || 0,
           stored: formatBytes(metadata.total_bytes || 0),
           cached_payloads: metadata.cached_count || 0
-        },
-        cache: {
-          entries: cache.entries || 0,
-          used: formatBytes(cache.used_bytes || 0),
-          capacity: formatBytes(cache.max_bytes || 0),
-          max_object: formatBytes(cache.max_object_bytes || 0),
-          hit_rate: `${hitRate.toFixed(1)}%`,
-          hits: cache.hits || 0,
-          misses: cache.misses || 0
         },
         auth: {
           active: authStats.active_count || 0,
@@ -217,27 +209,41 @@
       text("payload-count", metadata.payload_count || 0);
       text("stored-bytes", formatBytes(metadata.total_bytes || 0));
       text("cached-count", metadata.cached_count || 0);
-      text("cache-used", formatBytes(cache.used_bytes || 0));
-      text("cache-max", formatBytes(cache.max_bytes || 0));
-      text("cache-percent", cachePercent.toFixed(1));
-      text("cache-entries", cache.entries || 0);
-      text("hit-rate", hitRate.toFixed(1));
-      text("cache-hits", cache.hits || 0);
-      text("cache-misses", cache.misses || 0);
-      text("cache-max-object", formatBytes(cache.max_object_bytes || 0));
-      text("cache-entries-row", cache.entries || 0);
-      text("cache-used-row", formatBytes(cache.used_bytes || 0));
-      text("cache-max-row", formatBytes(cache.max_bytes || 0));
-      text("cache-max-object-row", formatBytes(cache.max_object_bytes || 0));
-      text("cache-hits-row", cache.hits || 0);
-      text("cache-misses-row", cache.misses || 0);
       text("auth-active", authStats.active_count || 0);
       text("auth-total", authStats.total_count || 0);
       text("auth-parked", authStats.parked_count || 0);
       text("auth-revoked", authStats.revoked_count || 0);
       setCount("request-error", requestError, "is-active");
       setCount("request-warn", requestWarn, "is-active");
-      document.getElementById("cache-meter").style.width = `${cachePercent.toFixed(1)}%`;
+      for (const id of ["cache-summary-usage", "cache-summary-hit-rate", "cache-details"]) {
+        document.getElementById(id).hidden = !cacheEnabled;
+      }
+      if (cacheEnabled) {
+        readableStats.cache = {
+          entries: cache.entries || 0,
+          used: formatBytes(cache.used_bytes || 0),
+          capacity: formatBytes(cache.max_bytes || 0),
+          max_object: formatBytes(cache.max_object_bytes || 0),
+          hit_rate: `${hitRate.toFixed(1)}%`,
+          hits: cache.hits || 0,
+          misses: cache.misses || 0
+        };
+        text("cache-used", formatBytes(cache.used_bytes || 0));
+        text("cache-max", formatBytes(cache.max_bytes || 0));
+        text("cache-percent", cachePercent.toFixed(1));
+        text("cache-entries", cache.entries || 0);
+        text("hit-rate", hitRate.toFixed(1));
+        text("cache-hits", cache.hits || 0);
+        text("cache-misses", cache.misses || 0);
+        text("cache-max-object", formatBytes(cache.max_object_bytes || 0));
+        text("cache-entries-row", cache.entries || 0);
+        text("cache-used-row", formatBytes(cache.used_bytes || 0));
+        text("cache-max-row", formatBytes(cache.max_bytes || 0));
+        text("cache-max-object-row", formatBytes(cache.max_object_bytes || 0));
+        text("cache-hits-row", cache.hits || 0);
+        text("cache-misses-row", cache.misses || 0);
+        document.getElementById("cache-meter").style.width = `${cachePercent.toFixed(1)}%`;
+      }
       text("stats", JSON.stringify(readableStats, null, 2));
     }
 

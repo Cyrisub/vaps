@@ -51,8 +51,8 @@ type dashboardInfoPaths struct {
 }
 
 type dashboardInfoConfig struct {
-	CacheBytes            int64  `json:"cache_bytes"`
-	CacheMaxObjectBytes   int64  `json:"cache_max_object_bytes"`
+	CacheBytes            *int64 `json:"cache_bytes,omitempty"`
+	CacheMaxObjectBytes   *int64 `json:"cache_max_object_bytes,omitempty"`
 	AuthExpireTime        string `json:"auth_expire_time"`
 	UploadDirectMaxBytes  int64  `json:"upload_direct_max_bytes"`
 	UploadExpiration      string `json:"upload_expiration"`
@@ -92,6 +92,21 @@ func (h *Handler) collectDashboardInfo() dashboardInfoResponse {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
+	config := dashboardInfoConfig{
+		AuthExpireTime:        h.opts.AuthExpireTime.String(),
+		UploadDirectMaxBytes:  h.opts.UploadDirectMaxBytes,
+		UploadExpiration:      h.opts.UploadExpiration.String(),
+		UploadCleanupInterval: h.opts.UploadCleanupInterval.String(),
+		StatusLogInterval:     h.opts.StatusLogInterval.String(),
+		LogRetentionDays:      h.opts.LogRetentionDays,
+	}
+	if h.opts.CacheBytes > 0 {
+		cacheBytes := h.opts.CacheBytes
+		cacheMaxObjectBytes := h.opts.CacheMaxObjectBytes
+		config.CacheBytes = &cacheBytes
+		config.CacheMaxObjectBytes = &cacheMaxObjectBytes
+	}
+
 	return dashboardInfoResponse{
 		Version:   version.Version,
 		Channel:   version.Channel,
@@ -118,16 +133,7 @@ func (h *Handler) collectDashboardInfo() dashboardInfoResponse {
 			UploadDir:  h.opts.UploadDir,
 			LogDir:     h.opts.LogDir,
 		},
-		Config: dashboardInfoConfig{
-			CacheBytes:            h.opts.CacheBytes,
-			CacheMaxObjectBytes:   h.opts.CacheMaxObjectBytes,
-			AuthExpireTime:        h.opts.AuthExpireTime.String(),
-			UploadDirectMaxBytes:  h.opts.UploadDirectMaxBytes,
-			UploadExpiration:      h.opts.UploadExpiration.String(),
-			UploadCleanupInterval: h.opts.UploadCleanupInterval.String(),
-			StatusLogInterval:     h.opts.StatusLogInterval.String(),
-			LogRetentionDays:      h.opts.LogRetentionDays,
-		},
+		Config: config,
 		Memory: dashboardInfoMemory{
 			Alloc: mem.Alloc,
 			Sys:   mem.Sys,

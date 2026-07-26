@@ -285,6 +285,10 @@ func newV2Handler(t *testing.T, meta *metadata.Store, lru *cache.Cache, objects 
 }
 
 func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, objects objectstore.Store) (http.Handler, *auth.Store) {
+	return newV2HandlerWithAuthAndCacheBytes(t, meta, lru, objects, 64*1024*1024)
+}
+
+func newV2HandlerWithAuthAndCacheBytes(t *testing.T, meta *metadata.Store, lru *cache.Cache, objects objectstore.Store, cacheBytes int64) (http.Handler, *auth.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	authStore, err := auth.Open(filepath.Join(dir, "auth.db"), time.Minute)
@@ -311,7 +315,7 @@ func newV2HandlerWithAuth(t *testing.T, meta *metadata.Store, lru *cache.Cache, 
 		LogDir:                filepath.Join(dir, "logs"),
 		LogRetentionDays:      7,
 		StatusLogInterval:     time.Minute,
-		CacheBytes:            64 * 1024 * 1024,
+		CacheBytes:            cacheBytes,
 		CacheMaxObjectBytes:   8 * 1024 * 1024,
 		StartedAt:             time.Now().UTC().Add(-time.Second),
 	}).HTTPHandler()

@@ -53,7 +53,7 @@
     </div>
   </section>
 
-  <section class="vaps-sector" id="cache">
+  <section class="vaps-sector" id="cache" hidden>
     <h2>Cache</h2>
     <div class="panel">
       <div class="metric-grid">
@@ -116,6 +116,7 @@
       const status = http.status || {};
       const bytes = http.bytes || {};
       const cache = stats.cache || {};
+      const cacheEnabled = Boolean(stats.cache);
       const hitRate = percent(cache.hits || 0, (cache.hits || 0) + (cache.misses || 0));
 
       text("http-total", requests.count || 0);
@@ -134,12 +135,15 @@
       text("status-error", status.server_error || 0);
       text("bytes-in", formatBytes(bytes.in || 0));
       text("bytes-out", formatBytes(bytes.out || 0));
-      text("cache-entries", cache.entries || 0);
-      text("cache-used", formatBytes(cache.used_bytes || 0));
-      text("cache-max", formatBytes(cache.max_bytes || 0));
-      text("cache-hit-rate", `${hitRate.toFixed(1)}%`);
-      text("cache-hits", cache.hits || 0);
-      text("cache-misses", cache.misses || 0);
+      document.getElementById("cache").hidden = !cacheEnabled;
+      if (cacheEnabled) {
+        text("cache-entries", cache.entries || 0);
+        text("cache-used", formatBytes(cache.used_bytes || 0));
+        text("cache-max", formatBytes(cache.max_bytes || 0));
+        text("cache-hit-rate", `${hitRate.toFixed(1)}%`);
+        text("cache-hits", cache.hits || 0);
+        text("cache-misses", cache.misses || 0);
+      }
       text("stats", JSON.stringify(stats, null, 2));
     }
 

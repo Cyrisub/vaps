@@ -39,8 +39,12 @@ func New(maxBytes, maxObjectBytes int64) *Cache {
 	}
 }
 
+func (c *Cache) Enabled() bool {
+	return c != nil && c.maxBytes > 0
+}
+
 func (c *Cache) CanStore(size int64) bool {
-	if c == nil || c.maxBytes <= 0 || size < 0 || size > c.maxBytes {
+	if !c.Enabled() || size < 0 || size > c.maxBytes {
 		return false
 	}
 	return c.maxObjectBytes <= 0 || size <= c.maxObjectBytes
@@ -70,7 +74,7 @@ func (c *Cache) Add(key string, data []byte) bool {
 }
 
 func (c *Cache) Get(key string) ([]byte, bool) {
-	if c == nil {
+	if !c.Enabled() {
 		return nil, false
 	}
 

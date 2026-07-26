@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"vaps/internal/cache"
 	"vaps/internal/metadata"
 )
 
@@ -361,6 +362,44 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 	}
 	if info.Config.CacheBytes <= 0 || info.Config.AuthExpireTime == "" || info.Config.UploadDirectMaxBytes <= 0 {
 		t.Fatalf("config incomplete: %#v", info.Config)
+	}
+}
+
+func TestDashboardHidesDisabledCache(t *testing.T) {
+	handler, _ := newV2HandlerWithAuthAndCacheBytes(t, openMetadata(t), cache.New(0, 0), nil, 0)
+
+	statsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(statsResponse, httptest.NewRequest(http.MethodGet, "/dashboard/stats", nil))
+	if statsResponse.Code != http.StatusOK {
+		t.Fatalf("stats status = %d, want 200", statsResponse.Code)
+	}
+	var stats map[string]json.RawMessage
+	if err := json.Unmarshal(statsResponse.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if _, ok := stats["cache"]; ok {
+		t.Fatalf("disabled cache should be omitted from dashboard stats")
+	}
+
+	infoResponse := httptest.NewRecorder()
+	handler.ServeHTTP(infoResponse, httptest.NewRequest(http.MethodGet, "/dashboard/info.json", nil))
+	if infoResponse.Code != http.StatusOK {
+		t.Fatalf("info status = %d, want 200", infoResponse.Code)
+	}
+	var info struct {
+		Config map[string]json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(infoResponse.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode info: %v", err)
+	}
+	if _, ok := info.Config["cache_bytes"]; ok {
+		t.Fatalf("disabled cache bytes should be omitted from dashboard info")
+	}
+
+	overview := httptest.NewRecorder()
+	handler.ServeHTTP(overview, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	if !bytes.Contains(overview.Body.Bytes(), []byte(`id="cache-details" hidden`)) {
+		t.Fatalf("overview should hide disabled cache details")
 	}
 }
 

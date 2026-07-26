@@ -193,6 +193,12 @@ func validate(cfg Config) error {
 	if time.Duration(cfg.Auth.ExpireTime) <= 0 {
 		return errors.New("auth-expire-time must be positive")
 	}
+	if cfg.Cache.Bytes < 0 {
+		return errors.New("cache-bytes must not be negative")
+	}
+	if cfg.Cache.MaxObjectBytes < 0 {
+		return errors.New("cache-max-object-bytes must not be negative")
+	}
 	if cfg.Upload.DirectMaxBytes <= 0 {
 		return errors.New("upload-direct-max-bytes must be positive")
 	}

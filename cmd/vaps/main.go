@@ -75,7 +75,10 @@ func run() int {
 		log.Print(err)
 		return 1
 	}
-	lru := cache.New(cfg.Cache.Bytes.Int64(), cfg.Cache.MaxObjectBytes.Int64())
+	var lru *cache.Cache
+	if cfg.Cache.Bytes.Int64() > 0 {
+		lru = cache.New(cfg.Cache.Bytes.Int64(), cfg.Cache.MaxObjectBytes.Int64())
+	}
 	authStore, err := auth.Open(cfg.AuthDB, time.Duration(cfg.Auth.ExpireTime))
 	if err != nil {
 		log.Print(err)
@@ -207,11 +210,20 @@ func startStatusLogger(ctx context.Context, interval time.Duration, meta *metada
 
 func logStatus(meta *metadata.Store, lru *cache.Cache) {
 	metadataStats, err := meta.Stats()
-	cacheStats := lru.Stats()
 	if err != nil {
-		log.Printf("status metadata_error=%q cache_entries=%d cache_used_bytes=%d cache_hits=%d cache_misses=%d", err, cacheStats.Entries, cacheStats.UsedBytes, cacheStats.Hits, cacheStats.Misses)
+		log.Printf("status metadata_error=%q", err)
 		return
 	}
+	if !lru.Enabled() {
+		log.Printf(
+			"status payload_count=%d total_bytes=%d cached_count=%d",
+			metadataStats.PayloadCount,
+			metadataStats.TotalBytes,
+			metadataStats.CachedCount,
+		)
+		return
+	}
+	cacheStats := lru.Stats()
 	log.Printf(
 		"status payload_count=%d total_bytes=%d cached_count=%d cache_entries=%d cache_used_bytes=%d cache_max_bytes=%d cache_hits=%d cache_misses=%d",
 		metadataStats.PayloadCount,

@@ -11,7 +11,7 @@ log_retention_days = 7
 status_log_interval = "1m"
 
 [cache]
-bytes = "64MiB"
+bytes = "0"
 max_object_bytes = "4MiB"
 
 [auth]
