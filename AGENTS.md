@@ -150,13 +150,14 @@ Platforms:
 
 Naming:
 
-- `vaps-<version>-<os>-<arch>.tar.gz` on Linux
-- `vaps-<version>-<os>-<arch>.zip` on macOS and Windows
+- `vaps-<version>-<os>-<arch>.tar.gz` on Linux and macOS
+- `vaps-<version>-<os>-<arch>.zip` on Windows
 
 Packaging rules:
 
-- Upload binary archives only; do not include source trees in custom release assets.
-- Each archive contains the `vaps` binary plus bundled helper scripts, default `config.toml`, and `vaps-install.conf`.
+- Upload platform binary archives plus a standalone Unix `install.sh` bootstrap asset; do not include source trees in custom release assets.
+- Each platform archive contains the `vaps` binary plus bundled `start`/`update` helper scripts, default `config.toml`, and `vaps-install.conf`.
+- `install.sh` is published as its own release asset (not inside the archives). Release publish substitutes `GITHUB_REPO` and `CHANNEL` to match that release.
 
 GitHub limitation:
 

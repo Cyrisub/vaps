@@ -179,11 +179,10 @@ jobs:
                 scripts/pkg/vaps-install.conf.template > "$staging/vaps-install.conf"
 
             if [ "$goos" = "windows" ]; then
-              cp scripts/pkg/windows/start.ps1 scripts/pkg/windows/update.ps1 scripts/pkg/windows/release-api.ps1 "$staging/"
+              cp scripts/pkg/windows/start.ps1 scripts/pkg/windows/update.ps1 "$staging/"
               (cd "$staging" && zip -q "../../pkg/${name}.zip" ./*)
             else
               cp scripts/pkg/unix/start.sh scripts/pkg/unix/update.sh "$staging/"
-              install -m 0755 scripts/lib/release-api.sh "$staging/release-api.sh"
               chmod +x "$staging/${binary_name}" "$staging/start.sh" "$staging/update.sh"
               tar -czf "dist/pkg/${name}.tar.gz" -C "$staging" .
             fi
@@ -191,6 +190,11 @@ jobs:
             sha256sum "$staging/${binary_name}" | awk -v artifact="$name" '{print $1 "  " artifact}' >> dist/pkg/checksums.txt
             rm -rf "$staging"
           done
+
+          sed -e "s|__GITHUB_REPO__|${GITHUB_REPOSITORY}|g" \
+              -e "s|__CHANNEL__|${CHANNEL}|g" \
+              scripts/pkg/unix/install.sh > dist/pkg/install.sh
+          chmod +x dist/pkg/install.sh
 
           sort -k2 dist/pkg/checksums.txt -o dist/pkg/checksums.txt
 
@@ -275,3 +279,4 @@ jobs:
           files: |
             dist/pkg/*.tar.gz
             dist/pkg/*.zip
+            dist/pkg/install.sh

@@ -24,7 +24,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and `.zip` on macOS and Windows. Each package includes the binary (`vaps` or `vaps.exe`), default `config.toml`, `start`/`update` helper scripts, and `release-api` helpers. SHA256 checksums in the release notes are for the target binary, not the archive. Run `vaps --version` to inspect the embedded version and release channel.
+Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and macOS, and `.zip` on Windows. Each package includes the binary (`vaps` or `vaps.exe`), default `config.toml`, and `start`/`update` helper scripts. SHA256 checksums in the release notes are for the target binary, not the archive. Run `vaps --version` to inspect the embedded version and release channel.
 
 GitHub also attaches automatic "Source code (zip/tar.gz)" downloads to every release. That behavior is controlled by GitHub and cannot be disabled from the workflow.
 
@@ -40,16 +40,17 @@ The release title is the tag (for example `v0.0.1`). Formal releases include a c
 
 ## Installation
 
-Release packages are self-contained: extract and run. Each archive contains:
+Release packages are self-contained: extract and run. Each platform archive contains:
 
 | File | Linux / macOS | Windows |
 |------|---------------|---------|
 | Server binary | `vaps` | `vaps.exe` |
 | Start helper | `start.sh` | `start.ps1` |
 | Update helper | `update.sh` | `update.ps1` |
-| Release lookup helper | `release-api.sh` | `release-api.ps1` |
 | Default config | `config.toml` | `config.toml` |
 | Install metadata | `vaps-install.conf` | `vaps-install.conf` |
+
+Each GitHub release also publishes a standalone Unix `install.sh` bootstrap asset (not inside the archives).
 
 `config.toml` is copied from `internal/appconfig/config.toml` at build time and matches the defaults embedded in the binary. Updates preserve an existing `config.toml` and `data/`.
 
@@ -64,7 +65,23 @@ The binary records its version and release channel at build time. Inspect them w
 
 ### Install
 
-Release packages are self-contained, so first-time install is extract-and-run. Download from [GitHub Releases](https://github.com/Cyrisub/vaps/releases) (browser download needs no API), or fetch a known tag with a direct asset URL:
+Unix bootstrap (release asset; channel is baked in at publish time):
+
+```sh
+# Formal release
+curl -fsSL https://github.com/Cyrisub/vaps/releases/latest/download/install.sh | bash
+
+# Pre-release / pinned tag
+curl -fsSL https://github.com/Cyrisub/vaps/releases/download/v0.0.1-alpha/install.sh | bash
+
+# Custom directory or version
+curl -fsSL https://github.com/Cyrisub/vaps/releases/download/v0.0.1-alpha/install.sh | bash -s -- --dir /opt/vaps
+curl -fsSL https://github.com/Cyrisub/vaps/releases/download/v0.0.1-alpha/install.sh | bash -s -- --version v0.0.1-alpha
+```
+
+Default install directory is the current working directory. If that directory already contains `vaps` and `vaps-install.conf`, `install.sh` performs an online in-place update (useful when the local `update.sh` cannot safely replace itself). It does not auto-start the service.
+
+You can also download a platform archive directly:
 
 ```sh
 TAG=v0.0.1-alpha
@@ -90,7 +107,6 @@ A typical install directory looks like:
   vaps
   start.sh
   update.sh
-  release-api.sh
   config.toml
   vaps-install.conf
   data/
@@ -124,7 +140,7 @@ By default, `update.sh` reads the release channel from `./vaps --version` and on
 
 ### macOS and Windows
 
-Release `.zip` packages for macOS and Windows include the same helper scripts adapted for each platform. Use them the same way after extracting the archive: edit `config.toml` if needed, run `start.ps1` or `start.sh`, and use `update.ps1` or `update.sh` to upgrade in place.
+macOS uses the same `.tar.gz` layout and Unix helper scripts as Linux. Windows `.zip` packages include `start.ps1` / `update.ps1`. After extracting: edit `config.toml` if needed, run `start.ps1` or `start.sh`, and use `update.ps1` or `update.sh` to upgrade in place.
 
 ## Configuration and local development
 

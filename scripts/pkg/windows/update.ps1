@@ -11,11 +11,84 @@ $ErrorActionPreference = 'Stop'
 $InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Conf = Join-Path $InstallDir 'vaps-install.conf'
 $StartScript = Join-Path $InstallDir 'start.ps1'
-$ReleaseApi = Join-Path $InstallDir 'release-api.ps1'
 $Bin = Join-Path $InstallDir 'vaps.exe'
 
 function Write-Log([string]$Message) {
     Write-Output "[update] $Message"
+}
+
+function Normalize-Tag([string]$Tag) {
+    if ($Tag.StartsWith('v')) { return $Tag }
+    return "v$Tag"
+}
+
+function Get-ArchiveName([string]$Tag, [string]$Goos, [string]$Arch) {
+    $version = $Tag.TrimStart('v')
+    return "vaps-$version-$Goos-$Arch.zip"
+}
+
+function Get-DownloadUrl([string]$Repo, [string]$Tag, [string]$Goos, [string]$Arch) {
+    $asset = Get-ArchiveName $Tag $Goos $Arch
+    return "https://github.com/$Repo/releases/download/$Tag/$asset"
+}
+
+function Get-WebLatestTag([string]$Repo) {
+    $response = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -MaximumRedirection 5 -Headers @{ 'User-Agent' = 'vaps-installer' }
+    $tag = $response.BaseResponse.ResponseUri.Segments[-1].TrimEnd('/')
+    if ([string]::IsNullOrWhiteSpace($tag) -or $tag -eq 'releases') {
+        throw 'could not resolve latest release tag'
+    }
+    return $tag
+}
+
+function Get-HtmlPreReleaseTag([string]$Html) {
+    $tag = $null
+    $pendingWarning = $false
+    foreach ($line in ($Html -split '>')) {
+        if ($line -match 'releases/tag/([^"]+)') {
+            $tag = $Matches[1]
+            $pendingWarning = $false
+        } elseif ($line -match 'Label--warning') {
+            $pendingWarning = $true
+        } elseif ($line -match '^Pre-release' -and $tag -and $pendingWarning) {
+            return $tag
+        } else {
+            $pendingWarning = $false
+        }
+    }
+    return $null
+}
+
+function Get-WebPreReleaseTag([string]$Repo) {
+    $response = Invoke-WebRequest -Uri "https://github.com/$Repo/releases" -Headers @{ 'User-Agent' = 'vaps-installer' }
+    return (Get-HtmlPreReleaseTag $response.Content)
+}
+
+function Resolve-Tag([string]$Repo, [string]$Channel, [string]$Pinned) {
+    if ($Pinned) {
+        return (Normalize-Tag $Pinned)
+    }
+
+    if ($Channel -eq 'release') {
+        return (Get-WebLatestTag $Repo)
+    }
+
+    $tag = Get-WebPreReleaseTag $Repo
+    if (-not $tag) {
+        throw 'no pre-release found; pass -Version TAG to install a specific release'
+    }
+    return $tag
+}
+
+function Read-VapsVersionInfo([string]$BinPath) {
+    $line = & $BinPath --version
+    if ($line -match '^vaps ([^ ]+) \((.+)\)$') {
+        return @{
+            Version = $Matches[1]
+            Channel = $Matches[2]
+        }
+    }
+    throw "could not parse version output: $line"
 }
 
 function Write-InstallConf {
@@ -53,7 +126,6 @@ function Install-PackageContents([string]$ExtractedDir) {
     Copy-Item -Path (Join-Path $ExtractedDir 'vaps.exe') -Destination $Bin -Force
     Copy-Item -Path (Join-Path $ExtractedDir 'start.ps1') -Destination (Join-Path $InstallDir 'start.ps1') -Force
     Copy-Item -Path (Join-Path $ExtractedDir 'update.ps1') -Destination (Join-Path $InstallDir 'update.ps1') -Force
-    Copy-Item -Path (Join-Path $ExtractedDir 'release-api.ps1') -Destination $ReleaseApi -Force
 
     $configPath = Join-Path $InstallDir 'config.toml'
     if (-not (Test-Path $configPath)) {
@@ -62,8 +134,6 @@ function Install-PackageContents([string]$ExtractedDir) {
 }
 
 Import-InstallConf
-if (-not (Test-Path $ReleaseApi)) { throw "missing $ReleaseApi" }
-. $ReleaseApi
 
 if (-not (Test-Path $Bin)) { throw "missing vaps binary: $Bin" }
 
@@ -76,10 +146,10 @@ if (-not $PSBoundParameters.ContainsKey('Version')) {
     $Version = ''
 }
 
-$tag = Resolve-ReleaseTag $GITHUB_REPO $Channel $Version
-$downloadUrl = Get-ReleaseDownloadUrl $GITHUB_REPO $tag 'windows' $ARCH
-$assetName = Get-ReleaseArchiveName $tag 'windows' $ARCH
-$currentTag = Get-ReleaseTagForVersion $info.Version
+$tag = Resolve-Tag $GITHUB_REPO $Channel $Version
+$downloadUrl = Get-DownloadUrl $GITHUB_REPO $tag 'windows' $ARCH
+$assetName = Get-ArchiveName $tag 'windows' $ARCH
+$currentTag = Normalize-Tag $info.Version
 
 if ([string]::IsNullOrWhiteSpace($Version) -and $tag -eq $currentTag) {
     Write-Log "already on $tag; nothing to do"
