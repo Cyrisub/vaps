@@ -20,6 +20,11 @@ type Options struct {
 	StatusLogInterval   time.Duration
 	CacheBytes          int64
 	CacheMaxObjectBytes int64
+	CosEndpoint         string
+	CosRegion           string
+	CosBucket           string
+	CosPrefix           string
+	InfoRefreshInterval time.Duration
 	StartedAt           time.Time
 }
 
@@ -29,5 +34,6 @@ func defaultOptions() Options {
 		UploadDirectMaxBytes:  8 * 1024 * 1024,
 		UploadExpiration:      24 * time.Hour,
 		UploadCleanupInterval: time.Minute,
+		InfoRefreshInterval:   5 * time.Second,
 	}
 }

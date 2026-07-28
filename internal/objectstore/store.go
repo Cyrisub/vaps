@@ -19,12 +19,21 @@ type Info struct {
 	Size        int64
 }
 
+type ObjectStats struct {
+	TotalBytes  int64
+	ObjectCount int64
+}
+
 // Store is the authoritative, synchronous payload store. A successful Put
 // means the backend has durably accepted the object.
 type Store interface {
 	Head(context.Context, string) (Info, error)
 	Put(context.Context, Info, io.Reader) error
 	Open(context.Context, string) (io.ReadCloser, Info, error)
+}
+
+type StatsStore interface {
+	Stats(context.Context) (ObjectStats, error)
 }
 
 // RangeStore is implemented by backends that can stream a byte range without

@@ -158,7 +158,7 @@ Or use a TOML config file:
 ./bin/vaps --config config.toml
 ```
 
-Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-storage-s3-bucket`, `-storage-s3-region`, and `-storage-local-max-cache-bytes`.
+Default settings are embedded in the binary from `internal/appconfig/config.toml`. Copy that file as a starting template. Size fields accept plain integers or go-humanize byte sizes such as `64MiB` and `42 MB`. Command-line flags can still override config values. Flag names are derived from TOML paths, for example `-addr`, `-storage-s3-bucket`, `-storage-s3-region`, and `-storage-local-max-cache-bytes`. The `[dashboard] info_refresh_interval` setting controls how often the Info page refreshes; it defaults to `5s`.
 
 Payloads are durably stored in the configured S3 bucket at `<prefix>/<iohash>`. The local `data/blobs` directory is a bounded, disposable cache; metadata is stored in `data/metadata.db`.
 Relative paths are resolved from the directory that contains the `vaps` binary, not from the shell's current working directory.

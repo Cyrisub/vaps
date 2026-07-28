@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -37,6 +39,10 @@ type S3Store struct {
 	client *s3.Client
 	bucket string
 	prefix string
+
+	statsMu       sync.Mutex
+	statsCache    ObjectStats
+	statsCachedAt time.Time
 }
 
 func NewS3(ctx context.Context, cfg S3Config) (*S3Store, error) {
@@ -175,11 +181,51 @@ func (s *S3Store) OpenRange(ctx context.Context, hash string, start, end int64) 
 	return output.Body, info, nil
 }
 
-func (s *S3Store) key(hash string) string {
-	if s.prefix == "" {
-		return hash
+func (s *S3Store) Stats(ctx context.Context) (ObjectStats, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if !s.statsCachedAt.IsZero() && time.Since(s.statsCachedAt) < 30*time.Second {
+		return s.statsCache, nil
 	}
-	return s.prefix + "/" + hash
+
+	var stats ObjectStats
+	var continuationToken *string
+	prefix := s.objectPrefix()
+	for {
+		output, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return ObjectStats{}, fmt.Errorf("list s3 objects with prefix %q: %w", prefix, err)
+		}
+		for _, object := range output.Contents {
+			stats.ObjectCount++
+			stats.TotalBytes += aws.ToInt64(object.Size)
+		}
+		if !aws.ToBool(output.IsTruncated) {
+			break
+		}
+		if output.NextContinuationToken == nil || aws.ToString(output.NextContinuationToken) == "" {
+			return ObjectStats{}, errors.New("list s3 objects returned no continuation token")
+		}
+		continuationToken = output.NextContinuationToken
+	}
+	s.statsCache = stats
+	s.statsCachedAt = time.Now()
+	return stats, nil
+}
+
+func (s *S3Store) key(hash string) string {
+	return s.objectPrefix() + hash
+}
+
+func (s *S3Store) objectPrefix() string {
+	if s.prefix == "" {
+		return ""
+	}
+	return s.prefix + "/"
 }
 
 func parseInfo(hash string, metadata map[string]string, contentLength int64) (Info, error) {

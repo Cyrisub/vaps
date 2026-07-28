@@ -23,6 +23,9 @@ expiration = "24h"
 cleanup_interval = "1m"
 dir = "data/uploads"
 
+[dashboard]
+info_refresh_interval = "5s"
+
 [storage.s3]
 bucket = "vaps-payloads"
 region = "us-east-1"

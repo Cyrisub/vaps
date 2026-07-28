@@ -141,3 +141,14 @@ func (s *memoryObjectStore) OpenRange(ctx context.Context, hash string, start, e
 	}
 	return io.NopCloser(bytes.NewReader(data[start : end+1])), info, nil
 }
+
+func (s *memoryObjectStore) Stats(_ context.Context) (objectstore.ObjectStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var stats objectstore.ObjectStats
+	for _, object := range s.objects {
+		stats.ObjectCount++
+		stats.TotalBytes += int64(len(object.data))
+	}
+	return stats, nil
+}

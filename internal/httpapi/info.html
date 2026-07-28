@@ -82,6 +82,28 @@
       rows.forEach(([label, value]) => el.appendChild(prop(label, value)));
     };
 
+    const parseDurationMs = (value) => {
+      const text = String(value || "");
+      const pattern = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
+      const factors = { ns: 1e-6, us: 1e-3, "µs": 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
+      let total = 0;
+      let consumed = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        if (match.index !== consumed) return 5000;
+        total += Number(match[1]) * factors[match[2]];
+        consumed = pattern.lastIndex;
+      }
+      return consumed === text.length && total > 0 ? total : 5000;
+    };
+
+    let refreshTimer = null;
+    const scheduleRefresh = (info) => {
+      if (refreshTimer !== null) clearInterval(refreshTimer);
+      const interval = parseDurationMs(info && info.config && info.config.info_refresh_interval);
+      refreshTimer = setInterval(() => { refresh().catch(() => {}); }, interval);
+    };
+
     const render = (info) => {
       const started = info.started_at ? new Date(info.started_at) : null;
       fill("tile-application", [
@@ -94,9 +116,6 @@
         ["executable", info.process && info.process.executable],
         ["data dir", info.paths && info.paths.data_dir],
         ["log dir", info.paths && info.paths.log_dir],
-        ["metadata db", info.paths && info.paths.metadata_db],
-        ["auth db", info.paths && info.paths.auth_db],
-        ["upload db", info.paths && info.paths.upload_db],
         ["upload dir", info.paths && info.paths.upload_dir],
       ]);
 
@@ -109,17 +128,30 @@
         ["cpus", info.runtime && info.runtime.num_cpu],
         ["heap alloc", info.memory ? formatBytes(info.memory.alloc) : "-"],
         ["mem sys", info.memory ? formatBytes(info.memory.sys) : "-"],
+        ["data disk total", info.runtime && info.runtime.data_disk ? formatBytes(info.runtime.data_disk.total_bytes) : "-"],
+        ["data disk free", info.runtime && info.runtime.data_disk ? formatBytes(info.runtime.data_disk.free_bytes) : "-"],
       ]);
 
       const cfg = info.config || {};
+      const cos = cfg.cos || {};
       const configRows = [
+        ["cos endpoint", cos.endpoint],
+        ["cos region", cos.region],
+        ["cos bucket", cos.bucket],
+        ["cos prefix", cos.prefix],
+        ["cos total size", formatBytes(cos.total_bytes)],
+        ["cos file count", cos.object_count],
         ["auth expire", cfg.auth_expire_time],
         ["upload direct max", formatBytes(cfg.upload_direct_max_bytes)],
         ["upload expiration", cfg.upload_expiration],
         ["upload cleanup", cfg.upload_cleanup_interval],
         ["status log interval", cfg.status_log_interval],
+        ["info refresh", cfg.info_refresh_interval],
         ["log retention days", cfg.log_retention_days],
       ];
+      if (cos.stats_error) {
+        configRows.splice(6, 0, ["cos stats error", cos.stats_error]);
+      }
       if (Object.prototype.hasOwnProperty.call(cfg, "cache_bytes")) {
         configRows.unshift(
           ["cache bytes", formatBytes(cfg.cache_bytes)],
@@ -134,13 +166,15 @@
     const refresh = async () => {
       const response = await fetch("/dashboard/info.json");
       if (!response.ok) throw new Error("info " + response.status);
-      render(await response.json());
+      const info = await response.json();
+      render(info);
+      scheduleRefresh(info);
     };
 
+    scheduleRefresh(null);
     refresh().catch((err) => {
       document.getElementById("raw").textContent = String(err);
     });
-    setInterval(() => { refresh().catch(() => {}); }, 5000);
   </script>
 </body>
 </html>

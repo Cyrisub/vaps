@@ -125,6 +125,11 @@ func run() int {
 		StatusLogInterval:     time.Duration(cfg.StatusLogInterval),
 		CacheBytes:            cfg.Cache.Bytes.Int64(),
 		CacheMaxObjectBytes:   cfg.Cache.MaxObjectBytes.Int64(),
+		CosEndpoint:           cfg.Storage.S3.Endpoint,
+		CosRegion:             cfg.Storage.S3.Region,
+		CosBucket:             cfg.Storage.S3.Bucket,
+		CosPrefix:             cfg.Storage.S3.Prefix,
+		InfoRefreshInterval:   time.Duration(cfg.Dashboard.InfoRefreshInterval),
 		StartedAt:             startedAt,
 	}).HTTPHandler()
 	startStatusLogger(ctx, time.Duration(cfg.StatusLogInterval), meta, lru)

@@ -317,6 +317,10 @@ func newV2HandlerWithAuthAndCacheBytes(t *testing.T, meta *metadata.Store, lru *
 		StatusLogInterval:     time.Minute,
 		CacheBytes:            cacheBytes,
 		CacheMaxObjectBytes:   8 * 1024 * 1024,
+		CosEndpoint:           "https://cos.example",
+		CosRegion:             "test-region",
+		CosBucket:             "test-bucket",
+		CosPrefix:             "payloads",
 		StartedAt:             time.Now().UTC().Add(-time.Second),
 	}).HTTPHandler()
 	return handler, authStore

@@ -345,7 +345,9 @@ func TestDashboardStatsIncludesAuthAndErrors(t *testing.T) {
 }
 
 func TestDashboardInfoEndpoint(t *testing.T) {
-	handler := newV2Handler(t, openMetadata(t), nil, nil)
+	objects := newMemoryObjectStore()
+	objects.objects["test-object"] = memoryObject{data: []byte("payload")}
+	handler := newV2Handler(t, openMetadata(t), nil, objects)
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/dashboard/info", nil))
@@ -374,6 +376,10 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 			GOARCH    string `json:"goarch"`
 			GoVersion string `json:"go_version"`
 			NumCPU    int    `json:"num_cpu"`
+			DataDisk  struct {
+				TotalBytes uint64 `json:"total_bytes"`
+				FreeBytes  uint64 `json:"free_bytes"`
+			} `json:"data_disk"`
 		} `json:"runtime"`
 		Process struct {
 			PID int `json:"pid"`
@@ -381,14 +387,20 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 		Listen struct {
 			Addr string `json:"addr"`
 		} `json:"listen"`
-		Paths struct {
-			DataDir string `json:"data_dir"`
-			LogDir  string `json:"log_dir"`
-		} `json:"paths"`
+		Paths  map[string]json.RawMessage `json:"paths"`
 		Config struct {
 			CacheBytes           int64  `json:"cache_bytes"`
 			AuthExpireTime       string `json:"auth_expire_time"`
 			UploadDirectMaxBytes int64  `json:"upload_direct_max_bytes"`
+			InfoRefreshInterval  string `json:"info_refresh_interval"`
+			COS                  struct {
+				Endpoint    string `json:"endpoint"`
+				Region      string `json:"region"`
+				Bucket      string `json:"bucket"`
+				Prefix      string `json:"prefix"`
+				TotalBytes  int64  `json:"total_bytes"`
+				ObjectCount int64  `json:"object_count"`
+			} `json:"cos"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(infoResponse.Body.Bytes(), &info); err != nil {
@@ -403,17 +415,36 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 	if info.Runtime.GOOS == "" || info.Runtime.GOARCH == "" || info.Runtime.GoVersion == "" || info.Runtime.NumCPU < 1 {
 		t.Fatalf("runtime incomplete: %#v", info.Runtime)
 	}
+	if info.Runtime.DataDisk.TotalBytes == 0 || info.Runtime.DataDisk.FreeBytes > info.Runtime.DataDisk.TotalBytes {
+		t.Fatalf("data disk incomplete: %#v", info.Runtime.DataDisk)
+	}
 	if info.Process.PID < 1 {
 		t.Fatalf("pid = %d, want > 0", info.Process.PID)
 	}
 	if info.Listen.Addr == "" {
 		t.Fatalf("listen addr empty")
 	}
-	if info.Paths.DataDir == "" {
-		t.Fatalf("data_dir empty")
+	if len(info.Paths["data_dir"]) == 0 {
+		t.Fatalf("data_dir missing")
 	}
-	if info.Config.CacheBytes <= 0 || info.Config.AuthExpireTime == "" || info.Config.UploadDirectMaxBytes <= 0 {
+	for _, name := range []string{"metadata_db", "auth_db", "upload_db"} {
+		if _, ok := info.Paths[name]; ok {
+			t.Fatalf("paths should not expose %s", name)
+		}
+	}
+	if info.Config.CacheBytes <= 0 ||
+		info.Config.AuthExpireTime == "" ||
+		info.Config.UploadDirectMaxBytes <= 0 ||
+		info.Config.InfoRefreshInterval != "5s" {
 		t.Fatalf("config incomplete: %#v", info.Config)
+	}
+	if info.Config.COS.Endpoint != "https://cos.example" ||
+		info.Config.COS.Region != "test-region" ||
+		info.Config.COS.Bucket != "test-bucket" ||
+		info.Config.COS.Prefix != "payloads" ||
+		info.Config.COS.TotalBytes != int64(len("payload")) ||
+		info.Config.COS.ObjectCount != 1 {
+		t.Fatalf("COS config/stats incomplete: %#v", info.Config.COS)
 	}
 }
 

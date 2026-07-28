@@ -138,6 +138,9 @@ func NewV2(store *blobstore.Store, objects objectstore.Store, meta *metadata.Sto
 	if opts.UploadCleanupInterval <= 0 {
 		opts.UploadCleanupInterval = defaultOptions().UploadCleanupInterval
 	}
+	if opts.InfoRefreshInterval <= 0 {
+		opts.InfoRefreshInterval = defaultOptions().InfoRefreshInterval
+	}
 	if opts.StartedAt.IsZero() {
 		opts.StartedAt = time.Now().UTC()
 	}
@@ -197,7 +200,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/info":
 		h.infoDashboard(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/info.json":
-		h.dashboardInfo(w)
+		h.dashboardInfo(w, r)
 	case r.URL.Path == "/v2/auth/request" && r.Method == http.MethodPost:
 		h.authRequest(w, r)
 	case r.URL.Path == "/v2/auth/park" && r.Method == http.MethodGet:

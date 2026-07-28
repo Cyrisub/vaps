@@ -33,6 +33,9 @@ func TestFromArgsUsesStorageDefaults(t *testing.T) {
 	if cfg.Storage.Local.MaxCacheBytes.Int64() != 100*1024*1024*1024 {
 		t.Fatalf("Storage.Local.MaxCacheBytes = %d", cfg.Storage.Local.MaxCacheBytes)
 	}
+	if time.Duration(cfg.Dashboard.InfoRefreshInterval) != 5*time.Second {
+		t.Fatalf("Dashboard.InfoRefreshInterval = %s", cfg.Dashboard.InfoRefreshInterval)
+	}
 }
 
 func TestFromArgsRejectsMissingDefaultS3Endpoint(t *testing.T) {
@@ -103,6 +106,21 @@ func TestFromArgsRejectsInvalidS3Endpoint(t *testing.T) {
 	}
 }
 
+func TestFromArgsRejectsInvalidDashboardRefreshInterval(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeConfig(t, dir, `
+[dashboard]
+info_refresh_interval = "0s"
+
+[storage.s3]
+endpoint = "https://s3.amazonaws.com"
+`)
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--config", configPath}, dir)
+	if err == nil || !strings.Contains(err.Error(), "dashboard-info-refresh-interval") {
+		t.Fatalf("error = %v, want invalid dashboard refresh interval error", err)
+	}
+}
+
 func TestFromArgsRejectsLegacyBackupConfiguration(t *testing.T) {
 	_, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend", "svn"}, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "unknown") {
@@ -157,9 +175,16 @@ func TestDurationRemainsUsable(t *testing.T) {
 	cfg, err := appconfig.FromArgsWithBaseDir([]string{
 		"--status-log-interval", "2m",
 		"--storage-s3-endpoint", "https://s3.amazonaws.com",
+		"--dashboard-info-refresh-interval", "7s",
 	}, t.TempDir())
-	if err != nil || time.Duration(cfg.StatusLogInterval) != 2*time.Minute {
-		t.Fatalf("StatusLogInterval = %s, error = %v", cfg.StatusLogInterval, err)
+	if err != nil ||
+		time.Duration(cfg.StatusLogInterval) != 2*time.Minute ||
+		time.Duration(cfg.Dashboard.InfoRefreshInterval) != 7*time.Second {
+		t.Fatalf("status/dashboard intervals = %s/%s, error = %v",
+			cfg.StatusLogInterval,
+			cfg.Dashboard.InfoRefreshInterval,
+			err,
+		)
 	}
 }
 

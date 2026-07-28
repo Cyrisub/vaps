@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -21,6 +22,9 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "vaps")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", binary, "./cmd/vaps")
 	build.Dir = projectRoot(t)
 	if out, err := build.CombinedOutput(); err != nil {

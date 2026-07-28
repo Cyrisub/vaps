@@ -21,18 +21,19 @@ var defaultConfigTOML []byte
 type Duration time.Duration
 
 type Config struct {
-	Addr              string        `toml:"addr" hidden:"" name:"addr"`
-	DataDir           string        `toml:"data_dir" hidden:"" name:"data-dir"`
-	MetadataDB        string        `toml:"metadata_db" hidden:"" name:"metadata-db"`
-	AuthDB            string        `toml:"auth_db" hidden:"" name:"auth-db"`
-	UploadDB          string        `toml:"upload_db" hidden:"" name:"upload-db"`
-	LogDir            string        `toml:"log_dir" hidden:"" name:"log-dir"`
-	LogRetentionDays  int           `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
-	StatusLogInterval Duration      `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
-	Cache             CacheConfig   `toml:"cache" embed:"" prefix:"cache-"`
-	Auth              AuthConfig    `toml:"auth" embed:"" prefix:"auth-"`
-	Upload            UploadConfig  `toml:"upload" embed:"" prefix:"upload-"`
-	Storage           StorageConfig `toml:"storage" embed:"" prefix:"storage-"`
+	Addr              string          `toml:"addr" hidden:"" name:"addr"`
+	DataDir           string          `toml:"data_dir" hidden:"" name:"data-dir"`
+	MetadataDB        string          `toml:"metadata_db" hidden:"" name:"metadata-db"`
+	AuthDB            string          `toml:"auth_db" hidden:"" name:"auth-db"`
+	UploadDB          string          `toml:"upload_db" hidden:"" name:"upload-db"`
+	LogDir            string          `toml:"log_dir" hidden:"" name:"log-dir"`
+	LogRetentionDays  int             `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
+	StatusLogInterval Duration        `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
+	Cache             CacheConfig     `toml:"cache" embed:"" prefix:"cache-"`
+	Auth              AuthConfig      `toml:"auth" embed:"" prefix:"auth-"`
+	Upload            UploadConfig    `toml:"upload" embed:"" prefix:"upload-"`
+	Dashboard         DashboardConfig `toml:"dashboard" embed:"" prefix:"dashboard-"`
+	Storage           StorageConfig   `toml:"storage" embed:"" prefix:"storage-"`
 }
 
 type AuthConfig struct {
@@ -49,6 +50,10 @@ type UploadConfig struct {
 type CacheConfig struct {
 	Bytes          utils.ByteSize `toml:"bytes" hidden:"" name:"bytes"`
 	MaxObjectBytes utils.ByteSize `toml:"max_object_bytes" hidden:"" name:"max-object-bytes"`
+}
+
+type DashboardConfig struct {
+	InfoRefreshInterval Duration `toml:"info_refresh_interval" hidden:"" name:"info-refresh-interval"`
 }
 
 type StorageConfig struct {
@@ -208,6 +213,9 @@ func validate(cfg Config) error {
 	}
 	if time.Duration(cfg.Upload.CleanupInterval) <= 0 {
 		return errors.New("upload-cleanup-interval must be positive")
+	}
+	if time.Duration(cfg.Dashboard.InfoRefreshInterval) <= 0 {
+		return errors.New("dashboard-info-refresh-interval must be positive")
 	}
 	if cfg.Storage.S3.Bucket == "" {
 		return errors.New("storage-s3-bucket is required")

@@ -72,3 +72,14 @@ func (f *FakeObjectStore) OpenRange(ctx context.Context, hash string, start, end
 	}
 	return io.NopCloser(bytes.NewReader(data[start : end+1])), info, nil
 }
+
+func (f *FakeObjectStore) Stats(_ context.Context) (objectstore.ObjectStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var stats objectstore.ObjectStats
+	for _, object := range f.objects {
+		stats.ObjectCount++
+		stats.TotalBytes += int64(len(object.data))
+	}
+	return stats, nil
+}
