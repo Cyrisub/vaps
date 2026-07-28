@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,9 @@ import (
 
 func TestFromArgsUsesStorageDefaults(t *testing.T) {
 	binDir := t.TempDir()
-	cfg, err := appconfig.FromArgsWithBaseDir(nil, binDir)
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{
+		"--storage-s3-endpoint", "https://s3.amazonaws.com",
+	}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
 	}
@@ -29,6 +32,13 @@ func TestFromArgsUsesStorageDefaults(t *testing.T) {
 	}
 	if cfg.Storage.Local.MaxCacheBytes.Int64() != 100*1024*1024*1024 {
 		t.Fatalf("Storage.Local.MaxCacheBytes = %d", cfg.Storage.Local.MaxCacheBytes)
+	}
+}
+
+func TestFromArgsRejectsMissingDefaultS3Endpoint(t *testing.T) {
+	_, err := appconfig.FromArgsWithBaseDir(nil, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "storage-s3-endpoint is required") {
+		t.Fatalf("error = %v, want missing endpoint error", err)
 	}
 }
 
@@ -66,12 +76,29 @@ func TestFromArgsRejectsMissingS3Configuration(t *testing.T) {
 	for _, content := range []string{
 		"[storage.s3]\nbucket = \"\"",
 		"[storage.s3]\nregion = \"\"",
+		"[storage.s3]\nendpoint = \"\"",
 		"[storage.local]\ndir = \"\"",
 	} {
 		dir := t.TempDir()
 		_, err := appconfig.FromArgsWithBaseDir([]string{"--config", writeConfig(t, dir, content)}, dir)
 		if err == nil {
 			t.Fatalf("FromArgsWithBaseDir(%q) error = nil", content)
+		}
+	}
+}
+
+func TestFromArgsRejectsInvalidS3Endpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"localhost:9000",
+		"ftp://minio.example",
+		"https://",
+		"https://minio.example?access_key=test",
+	} {
+		dir := t.TempDir()
+		content := "[storage.s3]\nendpoint = " + strconv.Quote(endpoint)
+		_, err := appconfig.FromArgsWithBaseDir([]string{"--config", writeConfig(t, dir, content)}, dir)
+		if err == nil || !strings.Contains(err.Error(), "storage-s3-endpoint") {
+			t.Fatalf("endpoint %q error = %v, want invalid endpoint error", endpoint, err)
 		}
 	}
 }
@@ -89,6 +116,7 @@ func TestFromArgsResolvesPathsAndKeepsExistingOptions(t *testing.T) {
 		"--data-dir", "payloads",
 		"--metadata-db", "meta/vaps.db",
 		"--storage-local-dir", "cache",
+		"--storage-s3-endpoint", "https://s3.amazonaws.com",
 		"--cache-bytes", "1MiB",
 		"--upload-direct-max-bytes", "2MiB",
 	}, binDir)
@@ -126,7 +154,10 @@ func TestFromArgsReturnsHelpAndVersion(t *testing.T) {
 }
 
 func TestDurationRemainsUsable(t *testing.T) {
-	cfg, err := appconfig.FromArgsWithBaseDir([]string{"--status-log-interval", "2m"}, t.TempDir())
+	cfg, err := appconfig.FromArgsWithBaseDir([]string{
+		"--status-log-interval", "2m",
+		"--storage-s3-endpoint", "https://s3.amazonaws.com",
+	}, t.TempDir())
 	if err != nil || time.Duration(cfg.StatusLogInterval) != 2*time.Minute {
 		t.Fatalf("StatusLogInterval = %s, error = %v", cfg.StatusLogInterval, err)
 	}

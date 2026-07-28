@@ -34,6 +34,22 @@ log() {
   printf '[install] %s\n' "$*"
 }
 
+check_s3_credentials() {
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    log "S3 credentials file found: $INSTALL_DIR/.env (it overrides process environment variables)"
+    log "ensure it contains VAPS_STORAGE_S3_SECRETID and VAPS_STORAGE_S3_SECRETKEY"
+    return
+  fi
+
+  if [ -n "${VAPS_STORAGE_S3_SECRETID:-}" ] && [ -n "${VAPS_STORAGE_S3_SECRETKEY:-}" ]; then
+    log "S3 credential environment variables detected"
+    return
+  fi
+
+  log "warning: S3 credentials were not detected"
+  log "set VAPS_STORAGE_S3_SECRETID and VAPS_STORAGE_S3_SECRETKEY, or create $INSTALL_DIR/.env"
+}
+
 die() {
   printf '[install] error: %s\n' "$*" >&2
   exit 1
@@ -310,6 +326,7 @@ if is_installed "$INSTALL_DIR"; then
 else
   log "installing into $INSTALL_DIR"
 fi
+check_s3_credentials
 
 tag=$(resolve_tag "$GITHUB_REPO" "$CHANNEL" "$PINNED_VERSION")
 url=$(download_url "$GITHUB_REPO" "$tag" "$GOOS" "$ARCH")

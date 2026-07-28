@@ -55,7 +55,7 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 		"--storage-s3-endpoint", s3.URL,
 		"--storage-s3-force-path-style=true",
 	)
-	cmd.Env = append(os.Environ(), "AWS_ACCESS_KEY_ID=functional-test", "AWS_SECRET_ACCESS_KEY=functional-test")
+	cmd.Env = append(os.Environ(), "VAPS_STORAGE_S3_SECRETID=functional-test", "VAPS_STORAGE_S3_SECRETKEY=functional-test")
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatalf("stderr pipe: %v", err)

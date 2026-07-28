@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +38,16 @@ func run() int {
 	if errors.Is(err, appconfig.ErrHelp) {
 		return 0
 	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	credentials, err := objectstore.LoadS3Credentials(filepath.Dir(executable))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -70,8 +81,13 @@ func run() int {
 		Endpoint:       cfg.Storage.S3.Endpoint,
 		Prefix:         cfg.Storage.S3.Prefix,
 		ForcePathStyle: cfg.Storage.S3.ForcePathStyle,
+		Credentials:    credentials,
 	})
 	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	if err := validateMetadataPayloads(ctx, meta, objects); err != nil {
 		log.Print(err)
 		return 1
 	}

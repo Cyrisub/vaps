@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,19 @@ func validate(cfg Config) error {
 	}
 	if cfg.Storage.S3.Region == "" {
 		return errors.New("storage-s3-region is required")
+	}
+	if endpoint := cfg.Storage.S3.Endpoint; endpoint == "" {
+		return errors.New("storage-s3-endpoint is required")
+	} else {
+		parsed, err := url.Parse(endpoint)
+		if err != nil ||
+			!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") ||
+			parsed.Hostname() == "" ||
+			parsed.User != nil ||
+			parsed.RawQuery != "" ||
+			parsed.Fragment != "" {
+			return errors.New("storage-s3-endpoint must be a valid http(s) URL")
+		}
 	}
 	if cfg.Storage.Local.Dir == "" {
 		return errors.New("storage-local-dir is required")

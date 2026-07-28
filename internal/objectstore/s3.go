@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -27,6 +29,7 @@ type S3Config struct {
 	Endpoint       string
 	Prefix         string
 	ForcePathStyle bool
+	Credentials    S3Credentials
 }
 
 // S3Store stores each payload at <prefix>/<iohash>.
@@ -43,15 +46,35 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3Store, error) {
 	if strings.TrimSpace(cfg.Region) == "" {
 		return nil, errors.New("s3 region must not be empty")
 	}
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	if endpoint == "" {
+		return nil, errors.New("s3 endpoint must not be empty")
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil ||
+		(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
+		parsed.Hostname() == "" ||
+		parsed.User != nil ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
+		return nil, errors.New("s3 endpoint must be a valid http(s) URL")
+	}
+	secretID := strings.TrimSpace(cfg.Credentials.SecretID)
+	if secretID == "" || strings.TrimSpace(cfg.Credentials.SecretKey) == "" {
+		return nil, errors.New("s3 credentials must not be empty")
+	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 	if err != nil {
 		return nil, fmt.Errorf("load aws configuration: %w", err)
 	}
+	awsCfg.Credentials = awscredentials.NewStaticCredentialsProvider(
+		secretID,
+		strings.TrimSpace(cfg.Credentials.SecretKey),
+		"",
+	)
 	client := s3.NewFromConfig(awsCfg, func(options *s3.Options) {
 		options.UsePathStyle = cfg.ForcePathStyle
-		if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" {
-			options.BaseEndpoint = aws.String(endpoint)
-		}
+		options.BaseEndpoint = aws.String(endpoint)
 	})
 	return NewS3WithClient(client, cfg)
 }

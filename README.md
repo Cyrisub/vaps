@@ -167,7 +167,7 @@ Access logs are written for every HTTP request. Status logs are written every mi
 
 ## Storage
 
-S3 is the authoritative payload store. Each upload is verified against its UE `FIoHash` and full BLAKE3-256 digest, then synchronously committed to S3 before VAPS returns success. The AWS SDK default credential chain is used, so deployments can use environment credentials, shared profiles, web identity, or workload identity. `storage.s3.endpoint` and `storage.s3.force_path_style` support MinIO and other S3-compatible services.
+S3 is the authoritative payload store. Each upload is verified against its UE `FIoHash` and full BLAKE3-256 digest, then synchronously committed to S3 before VAPS returns success. On startup, every payload recorded in metadata is checked for a matching object and `FIoHash` in S3; VAPS exits if validation fails. Credentials are read from `VAPS_STORAGE_S3_SECRETID` and `VAPS_STORAGE_S3_SECRETKEY`; a `.env` file beside the binary overrides those process environment variables. `storage.s3.endpoint` is required and must be an `http` or `https` URL; `storage.s3.force_path_style` supports MinIO and other S3-compatible services.
 
 ## HTTP API
 
