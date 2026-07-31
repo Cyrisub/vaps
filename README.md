@@ -454,15 +454,15 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 - `GET /dashboard/metadata`
 
   Returns the payload metadata HTML page. The page loads its data from
-  `/dashboard/metadata/query`.
+  `/dashboard/metadata/query`; click a hash to open the complete payload
+  metadata record.
 
 - `GET /dashboard/metadata/query`
 
   Query parameters:
 
   - `q`: case-insensitive `iohash` substring
-  - `status`: comma-separated `local`, `cache`, or `backup`
-  - `backup`: `all`, `none`, or `backuped`
+  - `status`: comma-separated `local` or `cache`
   - `min_size`, `max_size`: non-negative byte limits
   - `limit`: 1–500, default 100
   - `offset`: non-negative result offset
@@ -480,12 +480,9 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
       "size_human":"120.6 KiB",
       "status":1,
       "status_label":"cached",
-      "status_flags":{"local":true,"cache":false,"backup":true},
-      "backup":"backuped",
-      "vcs_count":1,
+      "status_flags":{"local":true,"cache":false},
       "created_at":"2026-07-30T12:00:00Z",
-      "last_accessed_at":null,
-      "backuped_at":null
+      "last_accessed_at":null
     }],
     "total":1,
     "limit":100,
@@ -494,8 +491,12 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
   ```
 
   `status` is `0` for stored in COS/S3 only and `1` for stored in COS/S3 plus
-  the local blob cache. `status_flags.local`, `cache`, and `backup` describe
-  the current local blob, in-memory cache, and COS/S3 availability.
+  the local blob cache. `status_flags.local` and `cache` describe the current
+  local blob and in-memory cache.
+
+- `GET /dashboard/metadata/detail?hash=<iohash>`
+
+  Returns the complete metadata record for one payload.
 
 - `GET /dashboard/sessions`
 

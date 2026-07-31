@@ -523,9 +523,8 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 			Checksum    string `json:"checksum"`
 			StatusLabel string `json:"status_label"`
 			StatusFlags struct {
-				Local  bool `json:"local"`
-				Cache  bool `json:"cache"`
-				Backup bool `json:"backup"`
+				Local bool `json:"local"`
+				Cache bool `json:"cache"`
 			} `json:"status_flags"`
 		} `json:"items"`
 	}
@@ -538,9 +537,12 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 	if defaultResult.Items[0].Checksum != "01020304" ||
 		defaultResult.Items[0].StatusLabel != "cached" ||
 		defaultResult.Items[0].StatusFlags.Local ||
-		defaultResult.Items[0].StatusFlags.Cache ||
-		defaultResult.Items[0].StatusFlags.Backup {
+		defaultResult.Items[0].StatusFlags.Cache {
 		t.Fatalf("metadata status = %#v", defaultResult.Items[0])
+	}
+	if bytes.Contains(defaultQuery.Body.Bytes(), []byte(`"backup"`)) ||
+		bytes.Contains(defaultQuery.Body.Bytes(), []byte(`"vcs_count"`)) {
+		t.Fatalf("metadata query contains removed backup/VCS fields: %s", defaultQuery.Body.String())
 	}
 
 	sizeAsc := httptest.NewRecorder()
@@ -567,6 +569,19 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 		t.Fatalf("bad sort status = %d, want 400", badSort.Code)
 	}
 
+	detail := httptest.NewRecorder()
+	handler.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/dashboard/metadata/detail?hash="+records[0].hash, nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("metadata detail status = %d, want 200; body=%q", detail.Code, detail.Body.String())
+	}
+	var payload metadata.Payload
+	if err := json.Unmarshal(detail.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode metadata detail: %v", err)
+	}
+	if payload.Hash != records[0].hash || payload.Checksum != "01020304" || payload.Size != records[0].size {
+		t.Fatalf("metadata detail = %#v", payload)
+	}
+
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/dashboard/metadata", nil))
 	if page.Code != http.StatusOK {
@@ -577,6 +592,12 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 	}
 	if !bytes.Contains(page.Body.Bytes(), []byte("Payload Metadata")) {
 		t.Fatalf("metadata page missing payload detail section")
+	}
+	if !bytes.Contains(page.Body.Bytes(), []byte(`data-payload-hash`)) ||
+		bytes.Contains(page.Body.Bytes(), []byte(">Backup<")) ||
+		bytes.Contains(page.Body.Bytes(), []byte(">VCS<")) ||
+		bytes.Contains(page.Body.Bytes(), []byte(`class="hint">none`)) {
+		t.Fatalf("metadata page contains unexpected columns or lacks clickable hash")
 	}
 }
 

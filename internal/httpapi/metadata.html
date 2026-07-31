@@ -9,11 +9,11 @@
   <style>
     form {
       display: grid;
-      grid-template-columns: 2fr repeat(5, minmax(120px, 1fr)) auto;
+      grid-template-columns: 2fr repeat(4, minmax(120px, 1fr)) auto;
       gap: 12px;
       align-items: end;
     }
-    table { min-width: 980px; }
+    table { min-width: 720px; }
     th.sortable {
       cursor: pointer;
       user-select: none;
@@ -26,12 +26,9 @@
       font-weight: 600;
     }
     th.sortable:not(.sorted) .sort-indicator { visibility: hidden; }
-    .payload-row { cursor: pointer; }
     .payload-row:hover td { background: var(--theme_p4); }
     .payload-row.selected td { background: var(--theme_g2); }
     .payload-status { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-    .payload-detail { margin-top: 16px; }
-    .payload-detail pre { max-height: 480px; overflow: auto; }
     @media (max-width: 960px) {
       form { grid-template-columns: 1fr; }
     }
@@ -57,15 +54,6 @@
             <option value="">All</option>
             <option value="local">Local</option>
             <option value="cache">Cache</option>
-            <option value="backup">Backup</option>
-          </select>
-        </label>
-        <label>
-          Backup
-          <select id="backup" name="backup">
-            <option value="">All</option>
-            <option value="none">None</option>
-            <option value="backuped">Backuped</option>
           </select>
         </label>
         <label>
@@ -105,12 +93,9 @@
                 Size<span class="sort-indicator" aria-hidden="true"></span>
               </th>
               <th>Status</th>
-              <th>Backup</th>
-              <th>Backuped</th>
               <th class="sortable sorted" data-sort="created" id="sort-created" title="Sort by created time" aria-sort="descending">
                 Created<span class="sort-indicator" aria-hidden="true">↓</span>
               </th>
-              <th>VCS</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -119,12 +104,16 @@
     </div>
   </section>
 
-  <section class="vaps-sector payload-detail" id="detail-section" hidden>
-    <h2>Payload Metadata</h2>
-    <div class="panel">
+  <div class="modal-backdrop" id="detail-modal" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="detail-title">Payload Metadata</h2>
+        <button class="modal-close" id="detail-close" type="button">Close</button>
+      </div>
+      <p class="error" id="detail-error"></p>
       <pre id="detail-body">{}</pre>
     </div>
-  </section>
+  </div>
 
   <script>
     const state = { offset: 0, sort: "created", order: "desc", items: [], selected: "" };
@@ -132,8 +121,11 @@
     const rows = document.getElementById("rows");
     const summary = document.getElementById("summary");
     const error = document.getElementById("error");
-    const detailSection = document.getElementById("detail-section");
+    const detailModal = document.getElementById("detail-modal");
+    const detailTitle = document.getElementById("detail-title");
+    const detailError = document.getElementById("detail-error");
     const detailBody = document.getElementById("detail-body");
+    const detailClose = document.getElementById("detail-close");
 
     const value = (id) => document.getElementById(id).value.trim();
     const formatBytes = (value) => {
@@ -164,7 +156,7 @@
       return Object.entries(flags || {})
         .filter((entry) => entry[1])
         .map((entry) => `<span class="pill">${escapeText(entry[0])}</span>`)
-        .join("") || '<span class="hint">none</span>';
+        .join("");
     };
 
     function updateSortHeaders() {
@@ -179,7 +171,7 @@
 
     function buildParams() {
       const params = new URLSearchParams();
-      for (const id of ["q", "status", "backup", "min_size", "max_size", "limit"]) {
+      for (const id of ["q", "status", "min_size", "max_size", "limit"]) {
         const current = value(id);
         if (current) params.set(id, current);
       }
@@ -204,20 +196,17 @@
       const limit = data.limit || Number(value("limit")) || 100;
       rows.innerHTML = items.map((item) => `
         <tr class="payload-row${item.hash === state.selected ? " selected" : ""}" data-payload-hash="${escapeText(item.hash)}">
-          <td><code>${escapeText(item.hash)}</code></td>
+          <td><button class="linkish" type="button" data-payload-hash="${escapeText(item.hash)}">${escapeText(item.hash)}</button></td>
           <td>${escapeText(item.size_human || formatBytes(item.size || 0))}</td>
           <td><div class="payload-status"><span class="pill">${escapeText(item.status_label || "unknown")}</span>${statusPills(item.status_flags)}</div></td>
-          <td>${escapeText(item.backup)}</td>
-          <td>${escapeText(formatDateTime(item.backuped_at))}</td>
           <td>${escapeText(formatDateTime(item.created_at))}</td>
-          <td>${escapeText(String(item.vcs_count || 0))}</td>
         </tr>
       `).join("");
       if (items.length === 0) {
-        rows.innerHTML = '<tr><td colspan="7" class="hint">No payload records matched the query.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="4" class="hint">No payload records matched the query.</td></tr>';
       }
-      rows.querySelectorAll("[data-payload-hash]").forEach((row) => {
-        row.addEventListener("click", () => selectPayload(row.dataset.payloadHash));
+      rows.querySelectorAll("button[data-payload-hash]").forEach((button) => {
+        button.addEventListener("click", () => selectPayload(button.dataset.payloadHash));
       });
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;
@@ -226,15 +215,26 @@
       document.getElementById("next").disabled = data.offset + limit >= data.total;
     }
 
-    function selectPayload(hash) {
+    async function selectPayload(hash) {
       const item = state.items.find((candidate) => candidate.hash === hash);
       if (!item) return;
       state.selected = hash;
-      detailBody.textContent = JSON.stringify(item, null, 2);
-      detailSection.hidden = false;
-      rows.querySelectorAll("[data-payload-hash]").forEach((row) => {
+      detailTitle.textContent = `Payload Metadata · ${hash}`;
+      detailError.textContent = "";
+      detailBody.textContent = "Loading...";
+      detailModal.hidden = false;
+      rows.querySelectorAll("tr[data-payload-hash]").forEach((row) => {
         row.classList.toggle("selected", row.dataset.payloadHash === hash);
       });
+      try {
+        const response = await fetch(`/dashboard/metadata/detail?hash=${encodeURIComponent(hash)}`);
+        if (!response.ok) throw new Error(await response.text());
+        const payload = await response.json();
+        detailBody.textContent = JSON.stringify(payload, null, 2);
+      } catch (err) {
+        detailError.textContent = err.message;
+        detailBody.textContent = "";
+      }
     }
 
     form.addEventListener("submit", (event) => {
@@ -265,6 +265,15 @@
         load().catch((err) => { error.textContent = err.message; });
       });
     }
+    detailClose.addEventListener("click", () => {
+      detailModal.hidden = true;
+    });
+    detailModal.addEventListener("click", (event) => {
+      if (event.target === detailModal) detailModal.hidden = true;
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") detailModal.hidden = true;
+    });
 
     updateSortHeaders();
     load().catch((err) => { error.textContent = err.message; });

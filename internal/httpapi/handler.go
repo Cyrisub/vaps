@@ -72,26 +72,21 @@ type metadataQueryResponse struct {
 }
 
 type metadataQueryItem struct {
-	Hash            string                 `json:"hash"`
-	Checksum        string                 `json:"checksum"`
-	Size            int64                  `json:"size"`
-	SizeHuman       string                 `json:"size_human"`
-	Status          metadata.PayloadStatus `json:"status"`
-	StatusLabel     string                 `json:"status_label"`
-	StatusFlags     metadataStatusFlags    `json:"status_flags"`
-	Backup          string                 `json:"backup"`
-	VCSCount        int                    `json:"vcs_count"`
-	CreatedAt       *time.Time             `json:"created_at"`
-	CreatedAtHuman  string                 `json:"created_at_human"`
-	LastAccessedAt  *time.Time             `json:"last_accessed_at"`
-	BackupedAt      *time.Time             `json:"backuped_at"`
-	BackupedAtHuman string                 `json:"backuped_at_human"`
+	Hash           string                 `json:"hash"`
+	Checksum       string                 `json:"checksum"`
+	Size           int64                  `json:"size"`
+	SizeHuman      string                 `json:"size_human"`
+	Status         metadata.PayloadStatus `json:"status"`
+	StatusLabel    string                 `json:"status_label"`
+	StatusFlags    metadataStatusFlags    `json:"status_flags"`
+	CreatedAt      *time.Time             `json:"created_at"`
+	CreatedAtHuman string                 `json:"created_at_human"`
+	LastAccessedAt *time.Time             `json:"last_accessed_at"`
 }
 
 type metadataStatusFlags struct {
-	Local  bool `json:"local"`
-	Cache  bool `json:"cache"`
-	Backup bool `json:"backup"`
+	Local bool `json:"local"`
+	Cache bool `json:"cache"`
 }
 
 var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
@@ -182,6 +177,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.dashboardStats(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata":
 		h.metadataDashboard(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/detail":
+		h.metadataDetail(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/metadata/query":
 		h.metadataQuery(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/dashboard/sessions/query":
@@ -360,6 +357,28 @@ func (h *Handler) metadataQuery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) metadataDetail(w http.ResponseWriter, r *http.Request) {
+	if h.meta == nil {
+		http.Error(w, "metadata is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	hash := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hash")))
+	if !blobstore.ValidHash(hash) {
+		http.Error(w, "invalid hash", http.StatusBadRequest)
+		return
+	}
+	payload, err := h.meta.GetPayload(hash)
+	if errors.Is(err, metadata.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
 func parseMetadataQuery(r *http.Request) (metadata.PayloadQuery, error) {
 	values := r.URL.Query()
 	query := metadata.PayloadQuery{
@@ -498,11 +517,9 @@ func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
 		Status:      payload.Status,
 		StatusLabel: payloadStatusLabel(payload.Status),
 		StatusFlags: metadataStatusFlags{
-			Local:  payload.Status.IsCached(),
-			Cache:  false,
-			Backup: true,
+			Local: payload.Status.IsCached(),
+			Cache: false,
 		},
-		Backup:         "backuped",
 		CreatedAt:      payload.CreatedAt,
 		CreatedAtHuman: formatHumanTime(payload.CreatedAt),
 		LastAccessedAt: payload.LastAccessedAt,
@@ -517,20 +534,6 @@ func (h *Handler) enrichMetadataQueryItem(item metadataQueryItem) metadataQueryI
 		}
 	}
 	item.StatusFlags.Cache = h.cache != nil && h.cache.Has(item.Hash)
-	item.StatusFlags.Backup = h.objects != nil
-	if item.StatusFlags.Backup {
-		item.Backup = "backuped"
-	} else {
-		item.Backup = "none"
-	}
-	if h.meta == nil {
-		return item
-	}
-	count, err := h.meta.CountVCSByPayloadHash(item.Hash)
-	if err != nil {
-		return item
-	}
-	item.VCSCount = count
 	return item
 }
 
