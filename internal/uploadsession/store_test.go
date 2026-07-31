@@ -21,7 +21,7 @@ func TestCreateAppendAndComplete(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	hash := utils.IoHashSumHex([]byte("hello"))
-	session, err := store.Create(hash, uploadsession.KindRegular, 5, nil)
+	session, err := store.Create(hash, "01020304", uploadsession.KindRegular, 5, nil)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestCleanupExpiredPurgesCompletedResidue(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	hash := utils.IoHashSumHex([]byte("hello"))
-	session, err := store.Create(hash, uploadsession.KindRegular, 5, nil)
+	session, err := store.Create(hash, "01020304", uploadsession.KindRegular, 5, nil)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestFinalConcatBuildsCombinedUpload(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	hash := utils.IoHashSumHex([]byte("hello"))
-	partialA, err := store.Create(hash, uploadsession.KindPartial, 2, nil)
+	partialA, err := store.Create(hash, "01020304", uploadsession.KindPartial, 2, nil)
 	if err != nil {
 		t.Fatalf("Create partial A: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestFinalConcatBuildsCombinedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append partial A: %v", err)
 	}
-	partialB, err := store.Create(hash, uploadsession.KindPartial, 3, nil)
+	partialB, err := store.Create(hash, "01020304", uploadsession.KindPartial, 3, nil)
 	if err != nil {
 		t.Fatalf("Create partial B: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestFinalConcatBuildsCombinedUpload(t *testing.T) {
 		t.Fatalf("Append partial B: %v", err)
 	}
 
-	final, err := store.BuildFinalFromPartials(hash, []uploadsession.Session{partialA, partialB})
+	final, err := store.BuildFinalFromPartials(hash, "01020304", []uploadsession.Session{partialA, partialB})
 	if err != nil {
 		t.Fatalf("BuildFinalFromPartials returned error: %v", err)
 	}

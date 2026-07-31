@@ -16,12 +16,14 @@ import (
 	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"vaps/internal/utils"
 )
 
 const (
-	metadataHash        = "vaps-iohash"
-	metadataContentHash = "vaps-blake3"
-	metadataSize        = "vaps-size"
+	metadataHash       = "vaps-iohash"
+	metadataChecksum   = "vaps-checksum"
+	metadataLegacyHash = "vaps-blake3"
+	metadataSize       = "vaps-size"
 )
 
 // S3Config configures an AWS S3 or S3-compatible object store.
@@ -124,9 +126,9 @@ func (s *S3Store) Put(ctx context.Context, info Info, reader io.Reader) error {
 		Body:          reader,
 		ContentLength: aws.Int64(info.Size),
 		Metadata: map[string]string{
-			metadataHash:        info.Hash,
-			metadataContentHash: info.ContentHash,
-			metadataSize:        strconv.FormatInt(info.Size, 10),
+			metadataHash:     info.Hash,
+			metadataChecksum: info.Checksum,
+			metadataSize:     strconv.FormatInt(info.Size, 10),
 		},
 	})
 	if err != nil {
@@ -229,19 +231,26 @@ func (s *S3Store) objectPrefix() string {
 }
 
 func parseInfo(hash string, metadata map[string]string, contentLength int64) (Info, error) {
-	contentHash := metadata[metadataContentHash]
-	if metadata[metadataHash] != hash || contentHash == "" {
+	checksum := metadata[metadataChecksum]
+	if metadata[metadataHash] != hash {
 		return Info{}, fmt.Errorf("%w: hash metadata is missing or invalid", ErrIntegrityMismatch)
 	}
 	size, err := strconv.ParseInt(metadata[metadataSize], 10, 64)
 	if err != nil || size < 0 || size != contentLength {
 		return Info{}, fmt.Errorf("%w: size metadata is missing or invalid", ErrIntegrityMismatch)
 	}
-	return Info{Hash: hash, ContentHash: contentHash, Size: size}, nil
+	if utils.ChecksumValid(checksum) {
+		return Info{Hash: hash, Checksum: checksum, Size: size}, nil
+	}
+	legacyChecksum := metadata[metadataLegacyHash]
+	if legacyChecksum == "" {
+		return Info{}, fmt.Errorf("%w: checksum metadata is missing or invalid", ErrIntegrityMismatch)
+	}
+	return Info{Hash: hash, LegacyChecksum: legacyChecksum, Size: size}, nil
 }
 
 func validateInfo(info Info) error {
-	if info.Hash == "" || info.ContentHash == "" || info.Size < 0 {
+	if !utils.IoHashValid(info.Hash) || !utils.ChecksumValid(info.Checksum) || info.Size < 0 {
 		return errors.New("invalid object info")
 	}
 	return nil

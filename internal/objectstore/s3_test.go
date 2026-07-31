@@ -35,3 +35,48 @@ func TestNewS3RejectsMissingCredentials(t *testing.T) {
 		t.Fatalf("error = %v, want missing credentials error", err)
 	}
 }
+
+func TestParseInfoUsesCRC32CChecksumMetadata(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	info, err := parseInfo(hash, map[string]string{
+		metadataHash:     hash,
+		metadataChecksum: "9a71bb4c",
+		metadataSize:     "5",
+	}, 5)
+	if err != nil {
+		t.Fatalf("parseInfo returned error: %v", err)
+	}
+	if info.Hash != hash || info.Checksum != "9a71bb4c" || info.Size != 5 {
+		t.Fatalf("parseInfo = %#v", info)
+	}
+}
+
+func TestParseInfoAcceptsLegacyOrRejectsInvalidChecksumMetadata(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	for name, metadata := range map[string]string{
+		"legacy":  "vaps-blake3",
+		"invalid": metadataChecksum,
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := map[string]string{
+				metadataHash: hash,
+				metadataSize: "5",
+			}
+			if name == "legacy" {
+				values[metadata] = "full-blake3"
+			} else {
+				values[metadata] = "not-a-checksum"
+			}
+			info, err := parseInfo(hash, values, 5)
+			if name == "legacy" {
+				if err != nil || info.LegacyChecksum != "full-blake3" {
+					t.Fatalf("parseInfo legacy = %#v, %v", info, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("parseInfo accepted invalid %s metadata", name)
+			}
+		})
+	}
+}

@@ -26,6 +26,12 @@
       font-weight: 600;
     }
     th.sortable:not(.sorted) .sort-indicator { visibility: hidden; }
+    .payload-row { cursor: pointer; }
+    .payload-row:hover td { background: var(--theme_p4); }
+    .payload-row.selected td { background: var(--theme_g2); }
+    .payload-status { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .payload-detail { margin-top: 16px; }
+    .payload-detail pre { max-height: 480px; overflow: auto; }
     @media (max-width: 960px) {
       form { grid-template-columns: 1fr; }
     }
@@ -113,12 +119,21 @@
     </div>
   </section>
 
+  <section class="vaps-sector payload-detail" id="detail-section" hidden>
+    <h2>Payload Metadata</h2>
+    <div class="panel">
+      <pre id="detail-body">{}</pre>
+    </div>
+  </section>
+
   <script>
-    const state = { offset: 0, sort: "created", order: "desc" };
+    const state = { offset: 0, sort: "created", order: "desc", items: [], selected: "" };
     const form = document.getElementById("filters");
     const rows = document.getElementById("rows");
     const summary = document.getElementById("summary");
     const error = document.getElementById("error");
+    const detailSection = document.getElementById("detail-section");
+    const detailBody = document.getElementById("detail-body");
 
     const value = (id) => document.getElementById(id).value.trim();
     const formatBytes = (value) => {
@@ -185,12 +200,13 @@
 
     function render(data) {
       const items = data.items || [];
+      state.items = items;
       const limit = data.limit || Number(value("limit")) || 100;
       rows.innerHTML = items.map((item) => `
-        <tr>
+        <tr class="payload-row${item.hash === state.selected ? " selected" : ""}" data-payload-hash="${escapeText(item.hash)}">
           <td><code>${escapeText(item.hash)}</code></td>
           <td>${escapeText(item.size_human || formatBytes(item.size || 0))}</td>
-          <td>${statusPills(item.status_flags)}</td>
+          <td><div class="payload-status"><span class="pill">${escapeText(item.status_label || "unknown")}</span>${statusPills(item.status_flags)}</div></td>
           <td>${escapeText(item.backup)}</td>
           <td>${escapeText(formatDateTime(item.backuped_at))}</td>
           <td>${escapeText(formatDateTime(item.created_at))}</td>
@@ -200,11 +216,25 @@
       if (items.length === 0) {
         rows.innerHTML = '<tr><td colspan="7" class="hint">No payload records matched the query.</td></tr>';
       }
+      rows.querySelectorAll("[data-payload-hash]").forEach((row) => {
+        row.addEventListener("click", () => selectPayload(row.dataset.payloadHash));
+      });
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;
       summary.textContent = `Showing ${start}-${end} of ${data.total} records`;
       document.getElementById("prev").disabled = data.offset <= 0;
       document.getElementById("next").disabled = data.offset + limit >= data.total;
+    }
+
+    function selectPayload(hash) {
+      const item = state.items.find((candidate) => candidate.hash === hash);
+      if (!item) return;
+      state.selected = hash;
+      detailBody.textContent = JSON.stringify(item, null, 2);
+      detailSection.hidden = false;
+      rows.querySelectorAll("[data-payload-hash]").forEach((row) => {
+        row.classList.toggle("selected", row.dataset.payloadHash === hash);
+      });
     }
 
     form.addEventListener("submit", (event) => {

@@ -14,9 +14,10 @@ var (
 
 // Info is the immutable identity of a stored payload.
 type Info struct {
-	Hash        string
-	ContentHash string
-	Size        int64
+	Hash           string
+	Checksum       string
+	LegacyChecksum string
+	Size           int64
 }
 
 type ObjectStats struct {

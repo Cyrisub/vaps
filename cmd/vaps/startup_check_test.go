@@ -14,9 +14,9 @@ import (
 func TestValidateMetadataPayloads(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 	payload := metadata.Payload{
-		Hash:        hash,
-		ContentHash: "content-hash",
-		Size:        12,
+		Hash:     hash,
+		Checksum: "01020304",
+		Size:     12,
 	}
 
 	tests := []struct {
@@ -28,7 +28,9 @@ func TestValidateMetadataPayloads(t *testing.T) {
 		{
 			name: "matching object",
 			headInfo: objectstore.Info{
-				Hash: hash,
+				Hash:     hash,
+				Checksum: "01020304",
+				Size:     12,
 			},
 		},
 		{
@@ -39,9 +41,20 @@ func TestValidateMetadataPayloads(t *testing.T) {
 		{
 			name: "mismatched hash",
 			headInfo: objectstore.Info{
-				Hash: "fedcba9876543210fedcba9876543210fedcba98",
+				Hash:     "fedcba9876543210fedcba9876543210fedcba98",
+				Checksum: "01020304",
+				Size:     12,
 			},
 			wantErr: "does not match S3 object hash",
+		},
+		{
+			name: "mismatched checksum",
+			headInfo: objectstore.Info{
+				Hash:     hash,
+				Checksum: "05060708",
+				Size:     12,
+			},
+			wantErr: "does not match S3 object checksum",
 		},
 	}
 

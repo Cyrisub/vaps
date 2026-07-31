@@ -101,7 +101,7 @@ func TestFunctionalDashboardStatsAndQuery(t *testing.T) {
 	payload := []byte("dashboard-stats")
 	hash := ioHash(payload)
 
-	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	requireStatus(t, push, http.StatusCreated)
 	readBody(t, push)
 

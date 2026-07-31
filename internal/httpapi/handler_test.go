@@ -144,7 +144,7 @@ func TestV2DirectPushPullAndRange(t *testing.T) {
 	hash := ioHash(payload)
 
 	push := httptest.NewRecorder()
-	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+checksum(payload), bytes.NewReader(payload))
 	pushReq.Header.Set("Authorization", authHeader(token))
 	handler.ServeHTTP(push, pushReq)
 	if push.Code != http.StatusCreated {
@@ -186,7 +186,7 @@ func TestV2MetadataExistsAndVCS(t *testing.T) {
 	hash := ioHash(payload)
 
 	push := httptest.NewRecorder()
-	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	pushReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+checksum(payload), bytes.NewReader(payload))
 	pushReq.Header.Set("Authorization", authHeader(token))
 	handler.ServeHTTP(push, pushReq)
 	if push.Code != http.StatusCreated {
@@ -257,7 +257,7 @@ func TestV2TusUploadCompletes(t *testing.T) {
 	hash := ioHash(payload)
 
 	create := httptest.NewRecorder()
-	createReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	createReq := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+checksum(payload), bytes.NewReader(payload))
 	createReq.Header.Set("Authorization", authHeader(token))
 	createReq.Header.Set("Tus-Resumable", "1.0.0")
 	createReq.Header.Set("Upload-Length", "18")

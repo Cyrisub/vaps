@@ -64,7 +64,7 @@ func TestFunctionalV2DirectPushPullAndRange(t *testing.T) {
 	payload := []byte("hello-functional-range")
 	hash := ioHash(payload)
 
-	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	requireStatus(t, push, http.StatusCreated)
 	readBody(t, push)
 
@@ -131,7 +131,7 @@ func TestFunctionalV2MetadataExistsAndVCS(t *testing.T) {
 	payload := []byte("functional-meta")
 	hash := ioHash(payload)
 
-	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	requireStatus(t, push, http.StatusCreated)
 	readBody(t, push)
 
@@ -182,8 +182,9 @@ func TestFunctionalV2TusUploadWithPatch(t *testing.T) {
 	token := requestToken(t, srv.Client, srv.URL)
 	payload := []byte("tus-patch-functional")
 	hash := ioHash(payload)
+	fileChecksum := checksum(payload)
 
-	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), nil)
+	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, fileChecksum), nil)
 	if err != nil {
 		t.Fatalf("new tus create request: %v", err)
 	}
@@ -201,8 +202,8 @@ func TestFunctionalV2TusUploadWithPatch(t *testing.T) {
 		t.Fatalf("Location header is empty")
 	}
 
-	uploadID := strings.TrimPrefix(location, "/v2/payload/push?iohash="+hash+"&upload_id=")
-	patchReq, err := http.NewRequest(http.MethodPatch, urlf(srv.URL, "/v2/payload/push?iohash=%s&upload_id=%s", hash, uploadID), bytes.NewReader(payload))
+	uploadID := strings.TrimPrefix(location, "/v2/payload/push?iohash="+hash+"&checksum="+fileChecksum+"&upload_id=")
+	patchReq, err := http.NewRequest(http.MethodPatch, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s&upload_id=%s", hash, fileChecksum, uploadID), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("new tus patch request: %v", err)
 	}
@@ -230,8 +231,9 @@ func TestFunctionalV2TusCreationWithUpload(t *testing.T) {
 	token := requestToken(t, srv.Client, srv.URL)
 	payload := []byte("tus-create-with-upload")
 	hash := ioHash(payload)
+	fileChecksum := checksum(payload)
 
-	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), bytes.NewReader(payload))
+	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, fileChecksum), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("new tus create request: %v", err)
 	}
@@ -283,12 +285,13 @@ func TestFunctionalV2MissingPayload(t *testing.T) {
 	readBody(t, resp)
 }
 
-func TestFunctionalV2PushHashMismatch(t *testing.T) {
+func TestFunctionalV2PushAcceptsCompressedBytesForUEHash(t *testing.T) {
 	srv := testserver.Start(t, testserver.Options{})
 	token := requestToken(t, srv.Client, srv.URL)
 	hash := ioHash([]byte("expected"))
+	payload := []byte("wrong-bytes")
 
-	resp := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader([]byte("wrong-bytes")))
-	requireStatus(t, resp, http.StatusBadRequest)
+	resp := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
+	requireStatus(t, resp, http.StatusCreated)
 	readBody(t, resp)
 }

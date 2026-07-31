@@ -21,20 +21,21 @@ func TestDirectPushCommitsAuthoritativeStoreBeforeSuccess(t *testing.T) {
 	token := requestToken(t, handler)
 	payload := []byte("durable-s3-payload")
 	hash := ioHash(payload)
+	fileChecksum := checksum(payload)
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+fileChecksum, bytes.NewReader(payload))
 	request.Header.Set("Authorization", authHeader(token))
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("push status = %d, want 201; body=%q", response.Code, response.Body.String())
 	}
 	stored, err := objects.Head(context.Background(), hash)
-	if err != nil || stored.Size != int64(len(payload)) || stored.ContentHash == "" {
+	if err != nil || stored.Size != int64(len(payload)) || stored.Checksum != fileChecksum {
 		t.Fatalf("authoritative object = %#v, %v", stored, err)
 	}
 	record, err := meta.GetPayload(hash)
-	if err != nil || record.ContentHash != stored.ContentHash || record.Status != metadata.StatusCached {
+	if err != nil || record.Checksum != stored.Checksum || record.Status != metadata.StatusCached {
 		t.Fatalf("metadata record = %#v, %v", record, err)
 	}
 }
@@ -47,9 +48,10 @@ func TestDirectPushFailsWhenAuthoritativeStoreFails(t *testing.T) {
 	token := requestToken(t, handler)
 	payload := []byte("not-durable")
 	hash := ioHash(payload)
+	fileChecksum := checksum(payload)
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+fileChecksum, bytes.NewReader(payload))
 	request.Header.Set("Authorization", authHeader(token))
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
@@ -64,12 +66,12 @@ func TestDirectPushRejectsExistingHashWithDifferentDigest(t *testing.T) {
 	objects := newMemoryObjectStore()
 	payload := []byte("collision-check")
 	hash := ioHash(payload)
-	objects.objects[hash] = memoryObject{info: objectstore.Info{Hash: hash, ContentHash: "different", Size: int64(len(payload))}}
+	objects.objects[hash] = memoryObject{info: objectstore.Info{Hash: hash, Checksum: "ffffffff", Size: int64(len(payload))}}
 	handler := newV2Handler(t, openMetadata(t), nil, objects)
 	token := requestToken(t, handler)
 
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash, bytes.NewReader(payload))
+	request := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+checksum(payload), bytes.NewReader(payload))
 	request.Header.Set("Authorization", authHeader(token))
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusConflict {

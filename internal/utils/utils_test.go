@@ -66,3 +66,17 @@ func TestIoHashValidAcceptsFortyHexCharacters(t *testing.T) {
 		t.Fatalf("IoHashValid returned true for short hash")
 	}
 }
+
+func TestChecksumUsesCRC32CCastagnoli(t *testing.T) {
+	hasher := utils.NewChecksum()
+	_, _ = hasher.Write([]byte("hello"))
+	if got := utils.ChecksumDigestHex(hasher); got != "9a71bb4c" {
+		t.Fatalf("ChecksumDigestHex = %q, want CRC32C 9a71bb4c", got)
+	}
+	if !utils.ChecksumValid("9a71bb4c") {
+		t.Fatalf("ChecksumValid rejected CRC32C checksum")
+	}
+	if utils.ChecksumValid("9A71BB4C") {
+		t.Fatalf("ChecksumValid accepted uppercase checksum")
+	}
+}

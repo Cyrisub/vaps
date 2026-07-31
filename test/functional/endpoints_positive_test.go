@@ -30,8 +30,9 @@ func TestFunctionalPositiveTusHeadAndDelete(t *testing.T) {
 	token := requestToken(t, srv.Client, srv.URL)
 	payload := []byte("tus-head-delete")
 	hash := ioHash(payload)
+	fileChecksum := checksum(payload)
 
-	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), nil)
+	createReq, err := http.NewRequest(http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, fileChecksum), nil)
 	if err != nil {
 		t.Fatalf("new tus create: %v", err)
 	}
@@ -45,9 +46,9 @@ func TestFunctionalPositiveTusHeadAndDelete(t *testing.T) {
 	requireStatus(t, createResp, http.StatusCreated)
 	location := createResp.Header.Get("Location")
 	readBody(t, createResp)
-	uploadID := strings.TrimPrefix(location, "/v2/payload/push?iohash="+hash+"&upload_id=")
+	uploadID := strings.TrimPrefix(location, "/v2/payload/push?iohash="+hash+"&checksum="+fileChecksum+"&upload_id=")
 
-	headReq, err := http.NewRequest(http.MethodHead, urlf(srv.URL, "/v2/payload/push?iohash=%s&upload_id=%s", hash, uploadID), nil)
+	headReq, err := http.NewRequest(http.MethodHead, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s&upload_id=%s", hash, fileChecksum, uploadID), nil)
 	if err != nil {
 		t.Fatalf("new tus head: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestFunctionalPositiveTusHeadAndDelete(t *testing.T) {
 	}
 	readBody(t, headResp)
 
-	deleteReq, err := http.NewRequest(http.MethodDelete, urlf(srv.URL, "/v2/payload/push?iohash=%s&upload_id=%s", hash, uploadID), nil)
+	deleteReq, err := http.NewRequest(http.MethodDelete, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s&upload_id=%s", hash, fileChecksum, uploadID), nil)
 	if err != nil {
 		t.Fatalf("new tus delete: %v", err)
 	}

@@ -29,6 +29,20 @@ func validateMetadataPayloads(ctx context.Context, meta *metadata.Store, objects
 				remote.Hash,
 			)
 		}
+		if remote.Checksum != payload.Checksum {
+			return fmt.Errorf(
+				"metadata payload %q does not match S3 object checksum %q",
+				payload.Hash,
+				remote.Checksum,
+			)
+		}
+		if remote.Size != payload.Size {
+			return fmt.Errorf(
+				"metadata payload %q does not match S3 object size %d",
+				payload.Hash,
+				remote.Size,
+			)
+		}
 	}
 	return nil
 }

@@ -92,7 +92,7 @@ func TestFunctionalNegativePullRange(t *testing.T) {
 	payload := []byte("range-negative-test")
 	hash := ioHash(payload)
 
-	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	push := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	requireStatus(t, push, http.StatusCreated)
 	readBody(t, push)
 
@@ -135,7 +135,11 @@ func TestFunctionalNegativePushAuthAndValidation(t *testing.T) {
 	requireStatus(t, noAuth, http.StatusUnauthorized)
 	readBody(t, noAuth)
 
-	hashMismatch := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader([]byte("wrong")))
+	missingChecksum := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader([]byte("x")))
+	requireStatus(t, missingChecksum, http.StatusBadRequest)
+	readBody(t, missingChecksum)
+
+	hashMismatch := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=ffffffff", hash), token, bytes.NewReader([]byte("wrong")))
 	requireStatus(t, hashMismatch, http.StatusBadRequest)
 	readBody(t, hashMismatch)
 
@@ -144,11 +148,11 @@ func TestFunctionalNegativePushAuthAndValidation(t *testing.T) {
 	readBody(t, badHash)
 
 	oversized := bytes.Repeat([]byte("x"), 8*1024*1024+1)
-	tooLarge := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", ioHash(oversized)), token, bytes.NewReader(oversized))
+	tooLarge := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", ioHash(oversized), checksum(oversized)), token, bytes.NewReader(oversized))
 	requireStatus(t, tooLarge, http.StatusRequestEntityTooLarge)
 	readBody(t, tooLarge)
 
-	patchNoUploadID := authRequest(t, srv.Client, http.MethodPatch, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader([]byte("x")))
+	patchNoUploadID := authRequest(t, srv.Client, http.MethodPatch, urlf(srv.URL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum([]byte("x"))), token, bytes.NewReader([]byte("x")))
 	requireStatus(t, patchNoUploadID, http.StatusBadRequest)
 	readBody(t, patchNoUploadID)
 }

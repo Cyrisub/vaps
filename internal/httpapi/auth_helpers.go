@@ -120,8 +120,8 @@ func isTusRequest(r *http.Request) bool {
 	}
 }
 
-func tusUploadLocation(hash, uploadID string) string {
-	return "/v2/payload/push?iohash=" + hash + "&upload_id=" + uploadID
+func tusUploadLocation(hash, checksum, uploadID string) string {
+	return "/v2/payload/push?iohash=" + hash + "&checksum=" + checksum + "&upload_id=" + uploadID
 }
 
 func setTusHeaders(w http.ResponseWriter, expiration int64) {

@@ -18,7 +18,7 @@ const helloHash = "ea8f163db38682925e4491c5e58d4bb3506ef8c1"
 func TestPutStoresPayloadByHash(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 
-	info, err := store.Put(helloHash, strings.NewReader("hello"))
+	info, err := store.Put(helloHash, checksum("hello"), strings.NewReader("hello"))
 	if err != nil {
 		t.Fatalf("Put returned error: %v", err)
 	}
@@ -44,9 +44,9 @@ func TestPutStoresPayloadByHash(t *testing.T) {
 func TestPutRejectsHashMismatchAndDoesNotCreateBlob(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 
-	_, err := store.Put(helloHash, strings.NewReader("goodbye"))
-	if !errors.Is(err, blobstore.ErrHashMismatch) {
-		t.Fatalf("Put error = %v, want ErrHashMismatch", err)
+	_, err := store.Put(helloHash, checksum("hello"), strings.NewReader("goodbye"))
+	if !errors.Is(err, blobstore.ErrChecksumMismatch) {
+		t.Fatalf("Put error = %v, want ErrChecksumMismatch", err)
 	}
 
 	exists, _, err := store.Exists(helloHash)
@@ -61,11 +61,11 @@ func TestPutRejectsHashMismatchAndDoesNotCreateBlob(t *testing.T) {
 func TestPutExistingPayloadDoesNotOverwrite(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 
-	first, err := store.Put(helloHash, strings.NewReader("hello"))
+	first, err := store.Put(helloHash, checksum("hello"), strings.NewReader("hello"))
 	if err != nil {
 		t.Fatalf("first Put returned error: %v", err)
 	}
-	second, err := store.Put(helloHash, strings.NewReader("hello"))
+	second, err := store.Put(helloHash, checksum("hello"), strings.NewReader("hello"))
 	if err != nil {
 		t.Fatalf("second Put returned error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRelativePathUsesBlobShardRule(t *testing.T) {
 func TestRejectsInvalidHash(t *testing.T) {
 	store := blobstore.New(t.TempDir())
 
-	_, err := store.Put("not-a-valid-iohash", strings.NewReader("hello"))
+	_, err := store.Put("not-a-valid-iohash", checksum("hello"), strings.NewReader("hello"))
 	if !errors.Is(err, blobstore.ErrInvalidHash) {
 		t.Fatalf("Put error = %v, want ErrInvalidHash", err)
 	}
@@ -124,7 +124,7 @@ func TestPutCleansTemporaryFileOnReadError(t *testing.T) {
 	root := t.TempDir()
 	store := blobstore.New(root)
 
-	_, err := store.Put(helloHash, errReader{})
+	_, err := store.Put(helloHash, checksum("hello"), errReader{})
 	if err == nil {
 		t.Fatalf("Put error = nil, want read error")
 	}
@@ -141,11 +141,11 @@ func TestPutCleansTemporaryFileOnReadError(t *testing.T) {
 func TestStoreEvictsOldestCacheEntryAboveLimit(t *testing.T) {
 	root := t.TempDir()
 	store := blobstore.NewWithMaxBytes(root, 5)
-	if _, err := store.Put(helloHash, strings.NewReader("hello")); err != nil {
+	if _, err := store.Put(helloHash, checksum("hello"), strings.NewReader("hello")); err != nil {
 		t.Fatalf("put first payload: %v", err)
 	}
 	secondHash := utils.IoHashSumHex([]byte("world!!"))
-	if _, err := store.Put(secondHash, strings.NewReader("world!!")); err != nil {
+	if _, err := store.Put(secondHash, checksum("world!!"), strings.NewReader("world!!")); err != nil {
 		t.Fatalf("put second payload: %v", err)
 	}
 	firstExists, _, err := store.Exists(helloHash)
@@ -168,6 +168,12 @@ func readAll(store *blobstore.Store, hash string) ([]byte, error) {
 	}
 	defer reader.Close()
 	return io.ReadAll(reader)
+}
+
+func checksum(value string) string {
+	hasher := utils.NewChecksum()
+	_, _ = hasher.Write([]byte(value))
+	return utils.ChecksumDigestHex(hasher)
 }
 
 type errReader struct{}

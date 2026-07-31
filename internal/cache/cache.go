@@ -92,6 +92,16 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 	return append([]byte(nil), value.data...), true
 }
 
+func (c *Cache) Has(key string) bool {
+	if c == nil || !c.Enabled() {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.items[key]
+	return ok
+}
+
 func (c *Cache) Stats() Stats {
 	if c == nil {
 		return Stats{}

@@ -38,11 +38,37 @@ func (s PayloadStatus) IsCached() bool {
 
 type Payload struct {
 	Hash           string        `json:"hash"`
-	ContentHash    string        `json:"content_hash"`
+	Checksum       string        `json:"checksum"`
+	LegacyChecksum string        `json:"-"`
 	Size           int64         `json:"size"`
 	Status         PayloadStatus `json:"status"`
 	CreatedAt      *time.Time    `json:"created_at"`
 	LastAccessedAt *time.Time    `json:"last_accessed_at,omitempty"`
+}
+
+func (p *Payload) UnmarshalJSON(data []byte) error {
+	var value struct {
+		Hash           string        `json:"hash"`
+		Checksum       string        `json:"checksum"`
+		LegacyChecksum string        `json:"content_hash"`
+		Size           int64         `json:"size"`
+		Status         PayloadStatus `json:"status"`
+		CreatedAt      *time.Time    `json:"created_at"`
+		LastAccessedAt *time.Time    `json:"last_accessed_at,omitempty"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*p = Payload{
+		Hash:           value.Hash,
+		Checksum:       value.Checksum,
+		LegacyChecksum: value.LegacyChecksum,
+		Size:           value.Size,
+		Status:         value.Status,
+		CreatedAt:      value.CreatedAt,
+		LastAccessedAt: value.LastAccessedAt,
+	}
+	return nil
 }
 
 type Stats struct {

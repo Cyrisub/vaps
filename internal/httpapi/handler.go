@@ -21,6 +21,7 @@ import (
 	"vaps/internal/objectstore"
 	"vaps/internal/reqlog"
 	"vaps/internal/uploadsession"
+	"vaps/internal/utils"
 )
 
 type Handler struct {
@@ -49,9 +50,10 @@ type existsItem struct {
 }
 
 type putResponse struct {
-	Hash   string `json:"hash"`
-	Size   int64  `json:"size"`
-	Stored bool   `json:"stored"`
+	Hash     string `json:"hash"`
+	Checksum string `json:"checksum"`
+	Size     int64  `json:"size"`
+	Stored   bool   `json:"stored"`
 }
 
 type dashboardStats struct {
@@ -71,14 +73,17 @@ type metadataQueryResponse struct {
 
 type metadataQueryItem struct {
 	Hash            string                 `json:"hash"`
+	Checksum        string                 `json:"checksum"`
 	Size            int64                  `json:"size"`
 	SizeHuman       string                 `json:"size_human"`
 	Status          metadata.PayloadStatus `json:"status"`
+	StatusLabel     string                 `json:"status_label"`
 	StatusFlags     metadataStatusFlags    `json:"status_flags"`
 	Backup          string                 `json:"backup"`
 	VCSCount        int                    `json:"vcs_count"`
 	CreatedAt       *time.Time             `json:"created_at"`
 	CreatedAtHuman  string                 `json:"created_at_human"`
+	LastAccessedAt  *time.Time             `json:"last_accessed_at"`
 	BackupedAt      *time.Time             `json:"backuped_at"`
 	BackupedAtHuman string                 `json:"backuped_at_human"`
 }
@@ -470,10 +475,12 @@ func parseNonNegativeInt64(value, name string) (int64, error) {
 
 func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
 	item := metadataQueryItem{
-		Hash:      payload.Hash,
-		Size:      payload.Size,
-		SizeHuman: formatHumanBytes(payload.Size),
-		Status:    payload.Status,
+		Hash:        payload.Hash,
+		Checksum:    payload.Checksum,
+		Size:        payload.Size,
+		SizeHuman:   formatHumanBytes(payload.Size),
+		Status:      payload.Status,
+		StatusLabel: payloadStatusLabel(payload.Status),
 		StatusFlags: metadataStatusFlags{
 			Local:  payload.Status.IsCached(),
 			Cache:  false,
@@ -482,11 +489,24 @@ func newMetadataQueryItem(payload metadata.Payload) metadataQueryItem {
 		Backup:         "backuped",
 		CreatedAt:      payload.CreatedAt,
 		CreatedAtHuman: formatHumanTime(payload.CreatedAt),
+		LastAccessedAt: payload.LastAccessedAt,
 	}
 	return item
 }
 
 func (h *Handler) enrichMetadataQueryItem(item metadataQueryItem) metadataQueryItem {
+	if h.store != nil {
+		if exists, _, err := h.store.Exists(item.Hash); err == nil {
+			item.StatusFlags.Local = exists
+		}
+	}
+	item.StatusFlags.Cache = h.cache != nil && h.cache.Has(item.Hash)
+	item.StatusFlags.Backup = h.objects != nil
+	if item.StatusFlags.Backup {
+		item.Backup = "backuped"
+	} else {
+		item.Backup = "none"
+	}
 	if h.meta == nil {
 		return item
 	}
@@ -496,6 +516,17 @@ func (h *Handler) enrichMetadataQueryItem(item metadataQueryItem) metadataQueryI
 	}
 	item.VCSCount = count
 	return item
+}
+
+func payloadStatusLabel(status metadata.PayloadStatus) string {
+	switch status {
+	case metadata.StatusCached:
+		return "cached"
+	case metadata.StatusStored:
+		return "stored"
+	default:
+		return "unknown"
+	}
 }
 
 func formatHumanBytes(value int64) string {
@@ -616,17 +647,19 @@ func (h *Handler) getPayload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
-	hash, ok := queryHash(w, r)
+	hash, checksum, ok := queryPayloadIdentity(w, r)
 	if !ok {
 		return
 	}
-	info, err := h.putPayloadDurably(r.Context(), hash, r.Body)
+	info, err := h.putPayloadDurably(r.Context(), hash, checksum, r.Body)
 	if err != nil {
 		if errors.Is(err, objectstore.ErrIntegrityMismatch) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		if errors.Is(err, blobstore.ErrInvalidHash) || errors.Is(err, blobstore.ErrHashMismatch) {
+		if errors.Is(err, blobstore.ErrInvalidHash) ||
+			errors.Is(err, blobstore.ErrInvalidChecksum) ||
+			errors.Is(err, blobstore.ErrChecksumMismatch) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -642,7 +675,7 @@ func (h *Handler) putPayload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, status, putResponse{Hash: info.Hash, Size: info.Size, Stored: true})
+	writeJSON(w, status, putResponse{Hash: info.Hash, Checksum: info.Checksum, Size: info.Size, Stored: true})
 }
 
 func (h *Handler) exists(w http.ResponseWriter, r *http.Request) {
@@ -697,6 +730,19 @@ func queryHash(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return hash, true
 }
 
+func queryPayloadIdentity(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	hash, ok := queryHash(w, r)
+	if !ok {
+		return "", "", false
+	}
+	checksum := strings.TrimSpace(r.URL.Query().Get("checksum"))
+	if !utils.ChecksumValid(checksum) {
+		http.Error(w, "invalid checksum", http.StatusBadRequest)
+		return "", "", false
+	}
+	return hash, checksum, true
+}
+
 func setPayloadHeaders(w http.ResponseWriter, info blobstore.Info) {
 	w.Header().Set("ETag", `"`+info.Hash+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
@@ -735,7 +781,7 @@ func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) 
 		return false, blobstore.Info{}, err
 	}
 	if !exists {
-		return true, blobstore.Info{Hash: hash, ContentHash: record.ContentHash, Size: record.Size}, nil
+		return true, blobstore.Info{Hash: hash, Checksum: record.Checksum, Size: record.Size}, nil
 	}
 	if info.Size != record.Size {
 		return false, blobstore.Info{}, errors.New("metadata size does not match local payload")
@@ -769,7 +815,7 @@ func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.
 		}
 		return nil, blobstore.Info{}, err
 	}
-	return reader, blobstore.Info{Hash: remote.Hash, ContentHash: remote.ContentHash, Size: remote.Size}, nil
+	return reader, blobstore.Info{Hash: remote.Hash, Checksum: remote.Checksum, Size: remote.Size}, nil
 }
 
 func (h *Handler) markCached(hash string) {

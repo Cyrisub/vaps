@@ -503,6 +503,7 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 		created := time.Unix(record.at, 0).UTC()
 		if err := meta.PutPayload(metadata.Payload{
 			Hash:      record.hash,
+			Checksum:  "01020304",
 			Size:      record.size,
 			Status:    metadata.StatusCached,
 			CreatedAt: &created,
@@ -518,7 +519,14 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 	}
 	var defaultResult struct {
 		Items []struct {
-			Hash string `json:"hash"`
+			Hash        string `json:"hash"`
+			Checksum    string `json:"checksum"`
+			StatusLabel string `json:"status_label"`
+			StatusFlags struct {
+				Local  bool `json:"local"`
+				Cache  bool `json:"cache"`
+				Backup bool `json:"backup"`
+			} `json:"status_flags"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(defaultQuery.Body.Bytes(), &defaultResult); err != nil {
@@ -526,6 +534,13 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 	}
 	if len(defaultResult.Items) != 3 || defaultResult.Items[0].Hash != records[2].hash {
 		t.Fatalf("default sort items = %#v, want created desc starting with %s", defaultResult.Items, records[2].hash)
+	}
+	if defaultResult.Items[0].Checksum != "01020304" ||
+		defaultResult.Items[0].StatusLabel != "cached" ||
+		defaultResult.Items[0].StatusFlags.Local ||
+		defaultResult.Items[0].StatusFlags.Cache ||
+		defaultResult.Items[0].StatusFlags.Backup {
+		t.Fatalf("metadata status = %#v", defaultResult.Items[0])
 	}
 
 	sizeAsc := httptest.NewRecorder()
@@ -559,6 +574,9 @@ func TestDashboardMetadataQuerySorts(t *testing.T) {
 	}
 	if !bytes.Contains(page.Body.Bytes(), []byte(`data-sort="size"`)) || !bytes.Contains(page.Body.Bytes(), []byte(`data-sort="created"`)) {
 		t.Fatalf("metadata page missing sortable headers")
+	}
+	if !bytes.Contains(page.Body.Bytes(), []byte("Payload Metadata")) {
+		t.Fatalf("metadata page missing payload detail section")
 	}
 }
 

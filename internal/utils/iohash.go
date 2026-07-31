@@ -3,13 +3,17 @@ package utils
 import (
 	"encoding/hex"
 	"hash"
+	"hash/crc32"
+	"strings"
 
 	"github.com/zeebo/blake3"
 )
 
 const (
-	IoHashSize    = 20
-	IoHashHexSize = IoHashSize * 2
+	IoHashSize      = 20
+	IoHashHexSize   = IoHashSize * 2
+	ChecksumSize    = crc32.Size
+	ChecksumHexSize = ChecksumSize * 2
 )
 
 func NewIoHash() hash.Hash {
@@ -31,6 +35,23 @@ func IoHashDigestHex(hasher hash.Hash) string {
 // this full digest to detect the otherwise theoretical FIoHash collision.
 func Blake3DigestHex(hasher hash.Hash) string {
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func NewChecksum() hash.Hash {
+	return crc32.New(crc32.MakeTable(crc32.Castagnoli))
+}
+
+func ChecksumDigestHex(hasher hash.Hash) string {
+	sum := hasher.Sum(nil)
+	return hex.EncodeToString(sum)
+}
+
+func ChecksumValid(value string) bool {
+	if len(value) != ChecksumHexSize {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == strings.ToLower(value)
 }
 
 func IoHashValid(value string) bool {

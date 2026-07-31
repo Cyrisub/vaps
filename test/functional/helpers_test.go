@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"vaps/internal/utils"
 	"vaps/internal/testserver"
+	"vaps/internal/utils"
 )
 
 const (
@@ -22,6 +22,12 @@ const (
 
 func ioHash(payload []byte) string {
 	return utils.IoHashSumHex(payload)
+}
+
+func checksum(payload []byte) string {
+	hasher := utils.NewChecksum()
+	_, _ = hasher.Write(payload)
+	return utils.ChecksumDigestHex(hasher)
 }
 
 func bearer(token string) string {
@@ -145,7 +151,7 @@ func pushDirect(t *testing.T, client *http.Client, baseURL, token, hash string, 
 }
 
 func pushDirectStatus(client *http.Client, baseURL, token, hash string, payload []byte) (int, error) {
-	resp, err := doAuthRequest(client, http.MethodPost, urlf(baseURL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	resp, err := doAuthRequest(client, http.MethodPost, urlf(baseURL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	if err != nil {
 		return 0, err
 	}

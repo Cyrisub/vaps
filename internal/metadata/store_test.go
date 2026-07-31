@@ -18,7 +18,7 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := time.Unix(123, 0).UTC()
-	record := metadata.Payload{Hash: helloHash, ContentHash: "full-blake3", Size: 5, Status: metadata.StatusCached, CreatedAt: &created}
+	record := metadata.Payload{Hash: helloHash, Checksum: "01020304", Size: 5, Status: metadata.StatusCached, CreatedAt: &created}
 	if err := store.PutPayload(record); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 	}
 	defer reopened.Close()
 	got, err := reopened.GetPayload(helloHash)
-	if err != nil || got.Hash != record.Hash || got.ContentHash != record.ContentHash || got.Size != record.Size || got.Status != record.Status || got.CreatedAt == nil || !got.CreatedAt.Equal(*record.CreatedAt) {
+	if err != nil || got.Hash != record.Hash || got.Checksum != record.Checksum || got.Size != record.Size || got.Status != record.Status || got.CreatedAt == nil || !got.CreatedAt.Equal(*record.CreatedAt) {
 		t.Fatalf("GetPayload = %#v, %v; want %#v", got, err, record)
 	}
 }
@@ -54,8 +54,8 @@ func TestStatsAndQueryUseUnifiedStatus(t *testing.T) {
 	}
 	defer store.Close()
 	records := []metadata.Payload{
-		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ContentHash: "a", Size: 5, Status: metadata.StatusStored, CreatedAt: timePtr(time.Unix(1, 0).UTC())},
-		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabc1", ContentHash: "b", Size: 10, Status: metadata.StatusCached, CreatedAt: timePtr(time.Unix(2, 0).UTC())},
+		{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Checksum: "01020304", Size: 5, Status: metadata.StatusStored, CreatedAt: timePtr(time.Unix(1, 0).UTC())},
+		{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbabc1", Checksum: "05060708", Size: 10, Status: metadata.StatusCached, CreatedAt: timePtr(time.Unix(2, 0).UTC())},
 	}
 	for _, record := range records {
 		if err := store.PutPayload(record); err != nil {
@@ -73,7 +73,7 @@ func TestStatsAndQueryUseUnifiedStatus(t *testing.T) {
 }
 
 func TestPayloadStatusMarshalsAsSingleEnum(t *testing.T) {
-	encoded, err := json.Marshal(metadata.Payload{Hash: helloHash, ContentHash: "digest", Size: 5, Status: metadata.StatusStored})
+	encoded, err := json.Marshal(metadata.Payload{Hash: helloHash, Checksum: "01020304", Size: 5, Status: metadata.StatusStored})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +81,21 @@ func TestPayloadStatusMarshalsAsSingleEnum(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded["status"] != float64(metadata.StatusStored) || decoded["content_hash"] != "digest" {
+	if decoded["status"] != float64(metadata.StatusStored) || decoded["checksum"] != "01020304" {
 		t.Fatalf("encoded payload = %#v", decoded)
 	}
 	if _, ok := decoded["backup_status"]; ok {
 		t.Fatalf("backup_status must not be persisted")
+	}
+}
+
+func TestPayloadUnmarshalsLegacyContentHashForMigration(t *testing.T) {
+	var payload metadata.Payload
+	if err := json.Unmarshal([]byte(`{"hash":"`+helloHash+`","content_hash":"legacy-blake3","size":5,"status":0}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Checksum != "" || payload.LegacyChecksum != "legacy-blake3" {
+		t.Fatalf("legacy payload = %#v", payload)
 	}
 }
 

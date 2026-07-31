@@ -35,18 +35,19 @@ const (
 )
 
 type Session struct {
-	ID           string     `json:"id"`
-	ExpectedHash string     `json:"expected_hash"`
-	Kind         Kind       `json:"kind"`
-	Length       int64      `json:"length"`
-	Offset       int64      `json:"offset"`
-	TempPath     string     `json:"temp_path"`
-	PartialRefs  []string   `json:"partial_refs,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	TerminatedAt *time.Time `json:"terminated_at,omitempty"`
+	ID               string     `json:"id"`
+	ExpectedHash     string     `json:"expected_hash"`
+	ExpectedChecksum string     `json:"expected_checksum"`
+	Kind             Kind       `json:"kind"`
+	Length           int64      `json:"length"`
+	Offset           int64      `json:"offset"`
+	TempPath         string     `json:"temp_path"`
+	PartialRefs      []string   `json:"partial_refs,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	TerminatedAt     *time.Time `json:"terminated_at,omitempty"`
 }
 
 type Store struct {
@@ -105,7 +106,7 @@ func (s *Store) init() error {
 	})
 }
 
-func (s *Store) Create(expectedHash string, kind Kind, length int64, partialRefs []string) (Session, error) {
+func (s *Store) Create(expectedHash, expectedChecksum string, kind Kind, length int64, partialRefs []string) (Session, error) {
 	id, err := newID()
 	if err != nil {
 		return Session{}, err
@@ -119,16 +120,17 @@ func (s *Store) Create(expectedHash string, kind Kind, length int64, partialRefs
 
 	now := time.Now().UTC()
 	session := Session{
-		ID:           id,
-		ExpectedHash: expectedHash,
-		Kind:         kind,
-		Length:       length,
-		Offset:       0,
-		TempPath:     tempPath,
-		PartialRefs:  partialRefs,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		ExpiresAt:    now.Add(s.expiration),
+		ID:               id,
+		ExpectedHash:     expectedHash,
+		ExpectedChecksum: expectedChecksum,
+		Kind:             kind,
+		Length:           length,
+		Offset:           0,
+		TempPath:         tempPath,
+		PartialRefs:      partialRefs,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		ExpiresAt:        now.Add(s.expiration),
 	}
 	if err := s.put(session); err != nil {
 		_ = os.Remove(tempPath)
@@ -262,7 +264,7 @@ func (s *Store) OpenTemp(id string) (*os.File, Session, error) {
 	return file, session, nil
 }
 
-func (s *Store) BuildFinalFromPartials(expectedHash string, partials []Session) (Session, error) {
+func (s *Store) BuildFinalFromPartials(expectedHash, expectedChecksum string, partials []Session) (Session, error) {
 	for _, partial := range partials {
 		if partial.Kind != KindPartial {
 			return Session{}, fmt.Errorf("session %s is not partial", partial.ID)
@@ -273,6 +275,9 @@ func (s *Store) BuildFinalFromPartials(expectedHash string, partials []Session) 
 		if err := s.ensureActive(partial); err != nil {
 			return Session{}, err
 		}
+		if partial.ExpectedHash != expectedHash || partial.ExpectedChecksum != expectedChecksum {
+			return Session{}, errors.New("partial upload identity does not match final upload")
+		}
 	}
 	refs := make([]string, len(partials))
 	var total int64
@@ -280,7 +285,7 @@ func (s *Store) BuildFinalFromPartials(expectedHash string, partials []Session) 
 		refs[i] = partial.ID
 		total += partial.Length
 	}
-	final, err := s.Create(expectedHash, KindFinal, total, refs)
+	final, err := s.Create(expectedHash, expectedChecksum, KindFinal, total, refs)
 	if err != nil {
 		return Session{}, err
 	}

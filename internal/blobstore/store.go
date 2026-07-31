@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrInvalidHash  = errors.New("invalid iohash")
-	ErrHashMismatch = errors.New("payload hash does not match requested iohash")
+	ErrInvalidHash      = errors.New("invalid iohash")
+	ErrInvalidChecksum  = errors.New("invalid checksum")
+	ErrChecksumMismatch = errors.New("payload checksum does not match requested checksum")
 )
 
 type Store struct {
@@ -25,10 +26,10 @@ type Store struct {
 }
 
 type Info struct {
-	Hash        string `json:"hash"`
-	ContentHash string `json:"content_hash,omitempty"`
-	Size        int64  `json:"size"`
-	Created     bool   `json:"stored"`
+	Hash     string `json:"hash"`
+	Checksum string `json:"checksum,omitempty"`
+	Size     int64  `json:"size"`
+	Created  bool   `json:"stored"`
 }
 
 // Staged is a verified payload that has not yet been published into the local
@@ -64,8 +65,8 @@ func RelativePath(hash string) (string, error) {
 	return "blobs/" + hash[:2] + "/" + hash[2:4] + "/" + hash + ".upayload", nil
 }
 
-func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
-	staged, err := s.Stage(hash, reader)
+func (s *Store) Put(hash, checksum string, reader io.Reader) (Info, error) {
+	staged, err := s.Stage(hash, checksum, reader)
 	if err != nil {
 		return Info{}, err
 	}
@@ -73,11 +74,15 @@ func (s *Store) Put(hash string, reader io.Reader) (Info, error) {
 	return s.Publish(staged)
 }
 
-// Stage streams a payload to a private temporary file and validates both its
-// Unreal FIoHash and complete BLAKE3-256 digest.
-func (s *Store) Stage(hash string, reader io.Reader) (*Staged, error) {
+// Stage streams a payload to a private temporary file and validates its
+// checksum. The hash identifies the payload and is not derived from the
+// transmitted bytes because the bytes may be compressed.
+func (s *Store) Stage(hash, checksum string, reader io.Reader) (*Staged, error) {
 	if _, err := s.Path(hash); err != nil {
 		return nil, err
+	}
+	if !utils.ChecksumValid(checksum) {
+		return nil, ErrInvalidChecksum
 	}
 
 	tmpDir := filepath.Join(s.root, "tmp")
@@ -96,7 +101,7 @@ func (s *Store) Stage(hash string, reader io.Reader) (*Staged, error) {
 		}
 	}()
 
-	hasher := utils.NewIoHash()
+	hasher := utils.NewChecksum()
 	size, copyErr := io.Copy(io.MultiWriter(tmp, hasher), reader)
 	if copyErr != nil {
 		_ = tmp.Close()
@@ -110,15 +115,15 @@ func (s *Store) Stage(hash string, reader io.Reader) (*Staged, error) {
 		return nil, err
 	}
 
-	actual := utils.IoHashDigestHex(hasher)
-	if actual != hash {
-		return nil, fmt.Errorf("%w: got %s want %s", ErrHashMismatch, actual, hash)
+	actual := utils.ChecksumDigestHex(hasher)
+	if actual != checksum {
+		return nil, fmt.Errorf("%w: got %s want %s", ErrChecksumMismatch, actual, checksum)
 	}
 	cleanup = false
 	return &Staged{Info: Info{
-		Hash:        hash,
-		ContentHash: utils.Blake3DigestHex(hasher),
-		Size:        size,
+		Hash:     hash,
+		Checksum: checksum,
+		Size:     size,
 	}, path: tmpPath}, nil
 }
 
@@ -144,9 +149,16 @@ func (s *Store) Publish(staged *Staged) (Info, error) {
 				return Info{}, statErr
 			}
 			if info.Size != staged.Size {
-				return Info{}, fmt.Errorf("%w: cached size %d does not match staged size %d", ErrHashMismatch, info.Size, staged.Size)
+				return Info{}, fmt.Errorf("%w: cached size %d does not match staged size %d", ErrChecksumMismatch, info.Size, staged.Size)
 			}
-			info.ContentHash = staged.ContentHash
+			cachedChecksum, checksumErr := checksumFile(target)
+			if checksumErr != nil {
+				return Info{}, checksumErr
+			}
+			if cachedChecksum != staged.Checksum {
+				return Info{}, fmt.Errorf("%w: cached checksum %s does not match staged checksum %s", ErrChecksumMismatch, cachedChecksum, staged.Checksum)
+			}
+			info.Checksum = staged.Checksum
 			info.Created = false
 			return info, nil
 		}
@@ -163,7 +175,7 @@ func (s *Store) Publish(staged *Staged) (Info, error) {
 	if err := s.evict(); err != nil {
 		return Info{}, err
 	}
-	return Info{Hash: staged.Hash, ContentHash: staged.ContentHash, Size: staged.Size, Created: true}, nil
+	return Info{Hash: staged.Hash, Checksum: staged.Checksum, Size: staged.Size, Created: true}, nil
 }
 
 // Open opens the verified staging file for a one-shot authoritative upload.
@@ -227,6 +239,19 @@ func (s *Store) stat(hash, path string) (Info, error) {
 		return Info{}, fmt.Errorf("payload path is a directory: %s", path)
 	}
 	return Info{Hash: hash, Size: stat.Size()}, nil
+}
+
+func checksumFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hasher := utils.NewChecksum()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return utils.ChecksumDigestHex(hasher), nil
 }
 
 type cacheFile struct {

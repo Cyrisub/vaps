@@ -167,49 +167,61 @@ Access logs are written for every HTTP request. Status logs are written every mi
 
 ## Storage
 
-S3 is the authoritative payload store. Each upload is verified against its UE `FIoHash` and full BLAKE3-256 digest, then synchronously committed to S3 before VAPS returns success. On startup, every payload recorded in metadata is checked for a matching object and `FIoHash` in S3; VAPS exits if validation fails. Credentials are read from `VAPS_STORAGE_S3_SECRETID` and `VAPS_STORAGE_S3_SECRETKEY`; a `.env` file beside the binary overrides those process environment variables. `storage.s3.endpoint` is required and must be an `http` or `https` URL; `storage.s3.force_path_style` supports MinIO and other S3-compatible services.
+S3 is the authoritative payload store. Each upload is verified against the client-provided UE `FIoHash` and a CRC32C (Castagnoli) checksum of the transmitted bytes, then synchronously committed to S3 before VAPS returns success. On startup, every payload recorded in metadata is checked for a matching object, `FIoHash`, checksum, and size in S3; VAPS exits if validation fails. Credentials are read from `VAPS_STORAGE_S3_SECRETID` and `VAPS_STORAGE_S3_SECRETKEY`; a `.env` file beside the binary overrides those process environment variables. `storage.s3.endpoint` is required and must be an `http` or `https` URL; `storage.s3.force_path_style` supports MinIO and other S3-compatible services.
 
 ## HTTP API
 
-VAPS exposes only v2 endpoints.
+Payload, authentication, and VCS metadata APIs are exposed under `/v2`.
+Health and dashboard endpoints are outside that namespace.
 
-Payload objects are identified with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the payload bytes: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
+### Common conventions
+
+- API paths are rooted at `/v2`.
+- Requests that require authentication use `Authorization: Bearer <token>`.
+- JSON requests should send `Content-Type: application/json`; JSON responses use `Content-Type: application/json`.
+- Timestamps are RFC3339 strings in UTC.
+- Unless noted otherwise, invalid parameters or request bodies return `400 Bad Request`; missing or invalid credentials return `401 Unauthorized`; missing payloads return `404 Not Found`.
+
+Payload objects are identified with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the uncompressed payload: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
+
+The `checksum` query parameter identifies the transmitted file, such as a compressed file. It is the lowercase 8-character hexadecimal CRC32C (Castagnoli) checksum of the exact request bytes. It is independent from the UE `iohash`; clients must calculate it from the compressed bytes before starting an upload.
 
 ### Auth
 
 - `POST /v2/auth/request`
 
-  Request a bearer token. No auth required. Reuse rules for the same `client_id`
-  and client IP:
+  Request a bearer token. No authentication is required. Tokens are reused for
+  the same `client_id` and client IP:
 
   1. If an **active** token exists, reuse it and refresh its idle expiry.
   2. Else if a **parked** token exists, wake it (clear parked state, set a new
      idle expiry) and return the same token value.
   3. Otherwise issue a new token.
 
-  Request:
+  Request body:
 
   ```json
   {"client_id":"studio-1","client_info":{"hostname":"dev-box","version":"1.0"}}
   ```
 
-  Response:
+  Successful response (`200 OK`):
 
   ```json
   {"token":"<token>","expires_at":"2026-07-04T15:16:00Z"}
   ```
 
-  `expires_at` uses a sliding idle window configured by `auth.expire_time`. Any successful
-  `Authorization: Bearer <token>` check refreshes the expiry time.
+  `client_id` is required. `client_info` is optional and is a string map for
+  client diagnostics. `expires_at` uses a sliding idle window configured by
+  `auth.expire_time`. Every successful authenticated request refreshes the
+  token expiry.
 
 - `GET /v2/auth/park`
 
   Park the caller's active token. Requires `Authorization: Bearer <token>`.
-  Successful auth refreshes idle expiry, then the token becomes **parked**: it
-  cannot authenticate until woken by a matching `/v2/auth/request`, and it does
-  not idle-expire while parked.
+  The token cannot authenticate again until a matching `/v2/auth/request` wakes
+  it, and it does not idle-expire while parked.
 
-  Response:
+  Successful response (`200 OK`):
 
   ```json
   {"parked":true}
@@ -217,88 +229,208 @@ Payload objects are identified with the `iohash` query parameter. An `iohash` is
 
 - `GET /v2/auth/expire`
 
-  Immediately revoke the caller's token. Requires `Authorization: Bearer <token>`.
-  Successful auth refreshes idle expiry before revoke. Revoked tokens are never
-  reused.
+  Immediately revoke the caller's token. Requires
+  `Authorization: Bearer <token>`. Revoked tokens are never reused.
 
-  Response:
+  Successful response (`200 OK`):
 
   ```json
   {"expired":true}
   ```
 
-Dashboard auth cleanup (HTML Auth Browser):
+Dashboard auth cleanup (also available from the HTML Auth Browser):
 
 - `POST /dashboard/auth/clear-expired` deletes expired tokens from the auth database.
 - `POST /dashboard/auth/clear-all` deletes every stored auth token.
 
-### Pull
+### Payload pull
 
 Requires `Authorization: Bearer <token>`.
 
 - `HEAD /v2/payload/pull?iohash=<iohash>`
 
-  Returns `ETag`, `Content-Length`, and `Accept-Ranges: bytes`.
+  Check whether a payload exists without downloading its body. A successful
+  response (`200 OK`) includes `ETag`, `Content-Length`, `Content-Type:
+  application/octet-stream`, and `Accept-Ranges: bytes`.
 
 - `GET /v2/payload/pull?iohash=<iohash>`
 
-  Returns payload bytes. Supports standard single-range requests and responds with `206 Partial Content` when appropriate.
+  Download the exact bytes previously uploaded. A successful full response is
+  `200 OK` with `Content-Type: application/octet-stream` and `ETag`.
 
-### Push
+  To download a single byte range, send a standard header:
+
+  ```http
+  Range: bytes=0-1048575
+  ```
+
+  The response is `206 Partial Content` and includes `Content-Range`,
+  `Content-Length`, and `Accept-Ranges`. Only one range is supported. Verify
+  the complete file with its stored `checksum` after a full download; a
+  partial response cannot be verified using the complete-file checksum.
+
+### Payload push
 
 Requires `Authorization: Bearer <token>`.
 
-The same URL supports direct upload for small payloads and tus uploads for large/resumable payloads.
+The same endpoint supports direct upload for small files and tus uploads for
+large or resumable files. Every push request must provide both `iohash` and
+`checksum`. The server validates `checksum` against the transmitted bytes and
+uses `iohash` as the payload identity and storage key.
 
 - `OPTIONS /v2/payload/push`
 
-  Returns tus capabilities and `Upload-Direct-Max-Bytes`.
+  Discover upload capabilities. A successful response (`204 No Content`)
+  includes `Tus-Resumable`, `Tus-Version`, `Tus-Extension`,
+  `Tus-Checksum-Algorithm`, and `Upload-Direct-Max-Bytes`. The latter is the
+  deployment-specific maximum body size for direct upload.
 
-- `POST /v2/payload/push?iohash=<iohash>` direct upload
+- `POST /v2/payload/push?iohash=<iohash>&checksum=<checksum>` direct upload
 
-  Upload the request body when no tus headers are present. Bodies larger than `upload.direct_max_bytes` return `413 Payload Too Large`.
+  Use this form when no tus headers are present. Send the compressed file as
+  the request body, preferably with `Content-Type: application/octet-stream`.
+  Bodies larger than `Upload-Direct-Max-Bytes` return `413 Payload Too Large`.
+  A newly stored payload returns `201 Created`; an identical already stored
+  payload returns `200 OK`.
 
-- `POST /v2/payload/push?iohash=<iohash>` tus create
+  Successful response:
 
-  Create a tus upload session with `Tus-Resumable: 1.0.0` and `Upload-Length`.
+  ```json
+  {"hash":"<iohash>","checksum":"<checksum>","size":123456,"stored":true}
+  ```
 
-- `HEAD /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+- `POST /v2/payload/push?iohash=<iohash>&checksum=<checksum>` tus create
 
-  Query the current upload offset.
+  Create a resumable upload session with `Tus-Resumable: 1.0.0` and
+  `Upload-Length: <total-file-size>`. Send no body for the normal create flow.
+  The successful response is `201 Created` and includes a `Location` URL with
+  `upload_id`, `Upload-Offset: 0`, `Upload-Length`, `Tus-Resumable`, and
+  `Upload-Expires`. Keep the complete `Location` URL for subsequent requests.
 
-- `PATCH /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+- `HEAD /v2/payload/push?iohash=<iohash>&checksum=<checksum>&upload_id=<upload_id>`
 
-  Append bytes using `Content-Type: application/offset+octet-stream`, `Upload-Offset`, and optional `Upload-Checksum`.
+  Query a resumable session. Requires `Tus-Resumable: 1.0.0`. The response is
+  `200 OK` with `Upload-Offset`, `Upload-Length`, `Tus-Resumable`, and
+  `Upload-Expires`.
 
-- `DELETE /v2/payload/push?iohash=<iohash>&upload_id=<upload_id>`
+- `PATCH /v2/payload/push?iohash=<iohash>&checksum=<checksum>&upload_id=<upload_id>`
 
-  Terminate an incomplete upload session.
+  Append one contiguous chunk using `Content-Type:
+  application/offset+octet-stream` and `Upload-Offset: <current-offset>`.
+  `Upload-Checksum` is optional and verifies this chunk only:
+
+  ```http
+  Upload-Checksum: sha256 <base64-digest>
+  ```
+
+  It supports `sha1` and `sha256`, with standard base64 encoding. This header
+  is separate from the required file-level CRC32C `checksum` query parameter.
+  If more bytes remain, the response is `204 No Content` with the new
+  `Upload-Offset`. When the final chunk completes the file, the server
+  validates the complete checksum and returns `201 Created` with the normal
+  push JSON response.
+
+- `DELETE /v2/payload/push?iohash=<iohash>&checksum=<checksum>&upload_id=<upload_id>`
+
+  Terminate an incomplete upload session. Requires `Tus-Resumable: 1.0.0`.
+  The response is `204 No Content`; temporary upload data is deleted.
+
+#### tus create with upload
+
+The tus `creation-with-upload` form uses the same `POST` URL with
+`Tus-Resumable: 1.0.0` and `Upload-Length`, plus the first bytes in the
+request body. The body length must not exceed `Upload-Length`. If it
+completes the upload, the response is `201 Created` with the normal push JSON
+response; otherwise it returns `201 Created` with `Location` and the current
+`Upload-Offset`.
+
+#### tus concatenation
+
+To upload chunks independently, create each partial upload with:
+
+```http
+POST /v2/payload/push?iohash=<iohash>&checksum=<checksum>
+Tus-Resumable: 1.0.0
+Upload-Concat: partial
+Upload-Length: 0
+```
+
+Append data to each returned partial `Location`. After all partial sessions
+are complete, create the final upload:
+
+```http
+POST /v2/payload/push?iohash=<iohash>&checksum=<checksum>
+Tus-Resumable: 1.0.0
+Upload-Concat: final; <partial-location-1> <partial-location-2>
+```
+
+The server concatenates the partial files in the listed order, verifies the
+complete-file CRC32C checksum, stores the result, and returns `201 Created`
+with the normal push JSON response.
 
 Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `expiration`, `termination`, `checksum`.
 
-### Metadata
+### VCS metadata
 
 - `POST /v2/metadata/exists`
 
-  Requires bearer token. Batch payload existence check. Successful auth refreshes token idle expiry.
+  Check multiple payload identities. Requires bearer authentication.
+
+  Request body:
+
+  ```json
+  {"hashes":["<iohash-1>","<iohash-2>"]}
+  ```
+
+  Successful response (`200 OK`):
+
+  ```json
+  {
+    "items": {
+      "<iohash-1>": {"exists":true,"size":123456},
+      "<iohash-2>": {"exists":false}
+    }
+  }
+  ```
 
 - `POST /v2/metadata`
 
-  No auth. Report VCS association data from a post-commit hook.
+  Report a VCS association for a payload. No authentication is required. The
+  request body must include `payload_hash`, `vcs_type`, `repo`, `revision`, and
+  `path`; `asset_id` and `metadata` are optional:
+
+  ```json
+  {
+    "payload_hash":"<iohash>",
+    "vcs_type":"git",
+    "repo":"ssh://git.example/project.git",
+    "revision":"abc123",
+    "path":"/Content/Foo.uasset",
+    "asset_id":"Foo",
+    "metadata":{"branch":"main"}
+  }
+  ```
+
+  The body is limited to 64 KiB. A successful response is `201 Created` and
+  returns the stored record, including `key`, `reported_at`, and `remote_ip`.
 
 - `GET /v2/metadata?payload_hash=<iohash>`
 
-  Query VCS metadata records for a payload.
+  Return all VCS association records for the payload. No authentication is
+  required. A valid payload with no records returns `200 OK` and an empty
+  JSON array.
 
-### Dashboard
+### Health and dashboard
 
 - `GET /health`
 
-  Returns `200 OK` with `ok` as plain text.
+  Liveness check. Returns `200 OK` with `ok` as plain text.
 
 - `GET /dashboard`
 
-  Returns a read-only HTML dashboard with server statistics.
+  Returns the overview HTML dashboard. This endpoint is intended for a browser;
+  clients needing machine-readable data should use `/dashboard/stats` and
+  `/dashboard/info.json`.
 
 - `GET /dashboard/info`
 
@@ -310,7 +442,7 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 
 - `GET /dashboard/stats`
 
-  Returns dashboard statistics as JSON:
+  Returns server statistics as JSON:
 
   ```json
   {
@@ -319,7 +451,107 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
   }
   ```
 
-Invalid hashes and malformed JSON return `400 Bad Request`. Unexpected storage or metadata errors return `500 Internal Server Error`.
+- `GET /dashboard/metadata`
+
+  Returns the payload metadata HTML page. The page loads its data from
+  `/dashboard/metadata/query`.
+
+- `GET /dashboard/metadata/query`
+
+  Query parameters:
+
+  - `q`: case-insensitive `iohash` substring
+  - `status`: comma-separated `local`, `cache`, or `backup`
+  - `backup`: `all`, `none`, or `backuped`
+  - `min_size`, `max_size`: non-negative byte limits
+  - `limit`: 1–500, default 100
+  - `offset`: non-negative result offset
+  - `sort`: `created` or `size`
+  - `order`: `asc` or `desc`
+
+  Response:
+
+  ```json
+  {
+    "items": [{
+      "hash":"<iohash>",
+      "checksum":"<crc32c>",
+      "size":123456,
+      "size_human":"120.6 KiB",
+      "status":1,
+      "status_label":"cached",
+      "status_flags":{"local":true,"cache":false,"backup":true},
+      "backup":"backuped",
+      "vcs_count":1,
+      "created_at":"2026-07-30T12:00:00Z",
+      "last_accessed_at":null,
+      "backuped_at":null
+    }],
+    "total":1,
+    "limit":100,
+    "offset":0
+  }
+  ```
+
+  `status` is `0` for stored in COS/S3 only and `1` for stored in COS/S3 plus
+  the local blob cache. `status_flags.local`, `cache`, and `backup` describe
+  the current local blob, in-memory cache, and COS/S3 availability.
+
+- `GET /dashboard/sessions`
+
+  Returns the runtime sessions HTML page. Its supporting JSON endpoints are:
+
+  - `GET /dashboard/sessions/query?status=active|ended|all&q=<text>&limit=<n>&offset=<n>&order=newest|oldest`
+  - `GET /dashboard/sessions/log?session_id=<id>&level=info|warn|error&q=<text>&limit=<n>&offset=<n>&order=newest|oldest`
+
+- `GET /dashboard/auth`
+
+  Returns the authentication browser HTML page. Its JSON query endpoint is:
+
+  - `GET /dashboard/auth/query?status=active|parked|expired|revoked&client_id=<text>&hash=<prefix>&limit=<n>&offset=<n>`
+
+- `POST /dashboard/auth/clear-expired`
+
+  Deletes expired authentication records and returns `{"deleted":<count>}`.
+
+- `POST /dashboard/auth/clear-all`
+
+  Deletes all authentication records and returns `{"deleted":<count>}`. All
+  clients must request new tokens afterward.
+
+- `GET /dashboard/errors`
+
+  Returns the error log HTML page. Its JSON query endpoint is:
+
+  - `GET /dashboard/errors/query?token_hash=<hash>&path=<path>&min_status=<n>&max_status=<n>&limit=<n>&offset=<n>&include_dashboard=true`
+
+  Dashboard requests are excluded by default. `min_status` and `max_status`
+  must be at least 400.
+
+- `GET /dashboard/telemetry`
+
+  Returns the telemetry HTML page.
+
+- `GET /dashboard/static/dashboard.css`
+- `GET /dashboard/static/dashboard.js`
+
+  Return the shared dashboard static assets.
+
+### Recommended client flow
+
+1. Call `/v2/auth/request` and retain the returned bearer token.
+2. Calculate `iohash` from the uncompressed UE payload and CRC32C
+   `checksum` from the compressed bytes that will be transmitted.
+3. Use direct `POST` when the file is within `Upload-Direct-Max-Bytes`;
+   otherwise use the tus create/`PATCH` flow and resume from `HEAD` after a
+   connection failure.
+4. Treat a `201 Created` or `200 OK` push response as success, and retain the
+   returned `size` and `checksum`.
+5. Use `GET /v2/payload/pull?iohash=...` to download the compressed bytes and
+   verify the complete downloaded file with the stored CRC32C checksum.
+
+Invalid hashes, unsupported query values, and malformed JSON return
+`400 Bad Request`. Unexpected storage or metadata errors return `500 Internal Server Error`.
 
 Optional: add Go-installed tools to your shell PATH if you want to call them directly:
 

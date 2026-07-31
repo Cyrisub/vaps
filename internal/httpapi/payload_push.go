@@ -51,7 +51,7 @@ func (h *Handler) pushOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) directPush(w http.ResponseWriter, r *http.Request) {
-	hash, ok := queryHash(w, r)
+	hash, checksum, ok := queryPayloadIdentity(w, r)
 	if !ok {
 		return
 	}
@@ -60,13 +60,15 @@ func (h *Handler) directPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limited := http.MaxBytesReader(w, r.Body, h.opts.UploadDirectMaxBytes+1)
-	info, err := h.putPayloadDurably(r.Context(), hash, limited)
+	info, err := h.putPayloadDurably(r.Context(), hash, checksum, limited)
 	if err != nil {
 		if errors.Is(err, objectstore.ErrIntegrityMismatch) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		if errors.Is(err, blobstore.ErrInvalidHash) || errors.Is(err, blobstore.ErrHashMismatch) {
+		if errors.Is(err, blobstore.ErrInvalidHash) ||
+			errors.Is(err, blobstore.ErrInvalidChecksum) ||
+			errors.Is(err, blobstore.ErrChecksumMismatch) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -86,11 +88,11 @@ func (h *Handler) directPush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, status, putResponse{Hash: info.Hash, Size: info.Size, Stored: true})
+	writeJSON(w, status, putResponse{Hash: info.Hash, Checksum: info.Checksum, Size: info.Size, Stored: true})
 }
 
 func (h *Handler) tusCreateUpload(w http.ResponseWriter, r *http.Request) {
-	hash, ok := queryHash(w, r)
+	hash, checksum, ok := queryPayloadIdentity(w, r)
 	if !ok {
 		return
 	}
@@ -100,7 +102,7 @@ func (h *Handler) tusCreateUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	concat := strings.TrimSpace(r.Header.Get("Upload-Concat"))
 	if concat != "" {
-		h.tusCreateConcat(w, r, hash, concat)
+		h.tusCreateConcat(w, r, hash, checksum, concat)
 		return
 	}
 	length, err := parseUploadLength(r.Header.Get("Upload-Length"))
@@ -108,7 +110,7 @@ func (h *Handler) tusCreateUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	session, err := h.uploads.Create(hash, uploadsession.KindRegular, length, nil)
+	session, err := h.uploads.Create(hash, checksum, uploadsession.KindRegular, length, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -132,9 +134,9 @@ func (h *Handler) tusCreateUpload(w http.ResponseWriter, r *http.Request) {
 	h.writeTusCreated(w, session, offset)
 }
 
-func (h *Handler) tusCreateConcat(w http.ResponseWriter, r *http.Request, hash, concat string) {
+func (h *Handler) tusCreateConcat(w http.ResponseWriter, r *http.Request, hash, checksum, concat string) {
 	if strings.HasPrefix(concat, "partial") {
-		session, err := h.uploads.Create(hash, uploadsession.KindPartial, 0, nil)
+		session, err := h.uploads.Create(hash, checksum, uploadsession.KindPartial, 0, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -156,7 +158,7 @@ func (h *Handler) tusCreateConcat(w http.ResponseWriter, r *http.Request, hash, 
 		}
 		partials = append(partials, partial)
 	}
-	final, err := h.uploads.BuildFinalFromPartials(hash, partials)
+	final, err := h.uploads.BuildFinalFromPartials(hash, checksum, partials)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -168,6 +170,10 @@ func (h *Handler) tusCreateConcat(w http.ResponseWriter, r *http.Request, hash, 
 }
 
 func (h *Handler) tusHeadUpload(w http.ResponseWriter, r *http.Request) {
+	hash, checksum, ok := queryPayloadIdentity(w, r)
+	if !ok {
+		return
+	}
 	uploadID := strings.TrimSpace(r.URL.Query().Get("upload_id"))
 	if uploadID == "" {
 		http.Error(w, "upload_id is required", http.StatusBadRequest)
@@ -176,6 +182,10 @@ func (h *Handler) tusHeadUpload(w http.ResponseWriter, r *http.Request) {
 	session, err := h.uploads.Get(uploadID)
 	if err != nil {
 		writeUploadError(w, err)
+		return
+	}
+	if session.ExpectedHash != hash || session.ExpectedChecksum != checksum {
+		http.Error(w, "upload identity does not match upload session", http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Upload-Offset", strconv.FormatInt(session.Offset, 10))
@@ -188,7 +198,7 @@ func (h *Handler) tusHeadUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) tusPatchUpload(w http.ResponseWriter, r *http.Request) {
-	hash, ok := queryHash(w, r)
+	hash, checksum, ok := queryPayloadIdentity(w, r)
 	if !ok {
 		return
 	}
@@ -214,6 +224,10 @@ func (h *Handler) tusPatchUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	if session.ExpectedHash != hash {
 		http.Error(w, "iohash does not match upload session", http.StatusBadRequest)
+		return
+	}
+	if session.ExpectedChecksum != checksum {
+		http.Error(w, "checksum does not match upload session", http.StatusBadRequest)
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -246,9 +260,22 @@ func (h *Handler) tusPatchUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) tusDeleteUpload(w http.ResponseWriter, r *http.Request) {
+	hash, checksum, ok := queryPayloadIdentity(w, r)
+	if !ok {
+		return
+	}
 	uploadID := strings.TrimSpace(r.URL.Query().Get("upload_id"))
 	if uploadID == "" {
 		http.Error(w, "upload_id is required", http.StatusBadRequest)
+		return
+	}
+	session, err := h.uploads.Get(uploadID)
+	if err != nil {
+		writeUploadError(w, err)
+		return
+	}
+	if session.ExpectedHash != hash || session.ExpectedChecksum != checksum {
+		http.Error(w, "upload identity does not match upload session", http.StatusBadRequest)
 		return
 	}
 	if err := h.uploads.Terminate(uploadID); err != nil {
@@ -276,7 +303,7 @@ func (h *Handler) finalizeUpload(r *http.Request, w http.ResponseWriter, session
 	if err != nil {
 		return err
 	}
-	info, err := h.putPayloadDurably(r.Context(), current.ExpectedHash, file)
+	info, err := h.putPayloadDurably(r.Context(), current.ExpectedHash, current.ExpectedChecksum, file)
 	closeErr := file.Close()
 	if err != nil {
 		return err
@@ -290,12 +317,12 @@ func (h *Handler) finalizeUpload(r *http.Request, w http.ResponseWriter, session
 	if _, err := h.uploads.MarkCompleted(session.ID); err != nil {
 		return err
 	}
-	writeJSON(w, http.StatusCreated, putResponse{Hash: info.Hash, Size: info.Size, Stored: true})
+	writeJSON(w, http.StatusCreated, putResponse{Hash: info.Hash, Checksum: info.Checksum, Size: info.Size, Stored: true})
 	return nil
 }
 
 func (h *Handler) writeTusCreated(w http.ResponseWriter, session uploadsession.Session, offset int64) {
-	location := tusUploadLocation(session.ExpectedHash, session.ID)
+	location := tusUploadLocation(session.ExpectedHash, session.ExpectedChecksum, session.ID)
 	w.Header().Set("Location", location)
 	w.Header().Set("Upload-Offset", strconv.FormatInt(offset, 10))
 	if session.Length > 0 {

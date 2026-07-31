@@ -11,6 +11,12 @@ func ioHash(payload []byte) string {
 	return utils.IoHashSumHex(payload)
 }
 
+func checksum(payload []byte) string {
+	hasher := utils.NewChecksum()
+	_, _ = hasher.Write(payload)
+	return utils.ChecksumDigestHex(hasher)
+}
+
 func openMetadata(t *testing.T) *metadata.Store {
 	t.Helper()
 	store, err := metadata.Open(t.TempDir() + "/metadata.db")

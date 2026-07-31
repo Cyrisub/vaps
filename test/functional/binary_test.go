@@ -95,7 +95,7 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	payload := []byte("binary-process-functional")
 	hash := ioHash(payload)
 
-	push := authRequest(t, client, http.MethodPost, urlf(baseURL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader(payload))
+	push := authRequest(t, client, http.MethodPost, urlf(baseURL, "/v2/payload/push?iohash=%s&checksum=%s", hash, checksum(payload)), token, bytes.NewReader(payload))
 	requireStatus(t, push, http.StatusCreated)
 	readBody(t, push)
 
@@ -137,7 +137,7 @@ func (s *binaryS3Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		metadata := make(http.Header)
-		for _, name := range []string{"X-Amz-Meta-Vaps-Iohash", "X-Amz-Meta-Vaps-Blake3", "X-Amz-Meta-Vaps-Size"} {
+		for _, name := range []string{"X-Amz-Meta-Vaps-Iohash", "X-Amz-Meta-Vaps-Checksum", "X-Amz-Meta-Vaps-Size"} {
 			metadata.Set(name, r.Header.Get(name))
 		}
 		s.objects[key] = binaryS3Object{data: data, metadata: metadata}
