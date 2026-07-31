@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -47,6 +48,48 @@ func TestDashboardReturnsHTML(t *testing.T) {
 	}
 	if !bytes.Contains(response.Body.Bytes(), []byte("VAPS Dashboard")) {
 		t.Fatalf("dashboard body does not contain title: %q", response.Body.String())
+	}
+}
+
+func TestAccessLogHidesVerboseAndKeepsWarningsAndErrors(t *testing.T) {
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+
+	handler := httpapi.AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/dashboard":
+			w.WriteHeader(http.StatusOK)
+		case "/dashboard/not-found":
+			http.NotFound(w, r)
+		default:
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	if logs.Len() != 0 {
+		t.Fatalf("verbose access log = %q, want hidden", logs.String())
+	}
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/dashboard/not-found", nil))
+	if got := logs.String(); !strings.Contains(got, "access method=GET path=\"/dashboard/not-found\" status=404") ||
+		!strings.Contains(got, "level=warning") {
+		t.Fatalf("warning access log = %q", got)
+	}
+
+	logs.Reset()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/internal-error", nil))
+	if got := logs.String(); !strings.Contains(got, "access method=GET path=\"/internal-error\" status=500") ||
+		!strings.Contains(got, "level=error") {
+		t.Fatalf("error access log = %q", got)
 	}
 }
 

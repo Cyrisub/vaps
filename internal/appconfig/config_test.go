@@ -36,6 +36,16 @@ func TestFromArgsUsesStorageDefaults(t *testing.T) {
 	if time.Duration(cfg.Dashboard.InfoRefreshInterval) != 5*time.Second {
 		t.Fatalf("Dashboard.InfoRefreshInterval = %s", cfg.Dashboard.InfoRefreshInterval)
 	}
+	if cfg.Metadata.Workers != -1 ||
+		time.Duration(cfg.Metadata.Timeout) != 10*time.Second ||
+		time.Duration(cfg.Metadata.ProgressInterval) != 10*time.Second {
+		t.Fatalf(
+			"metadata validation defaults = %d/%s/%s",
+			cfg.Metadata.Workers,
+			cfg.Metadata.Timeout,
+			cfg.Metadata.ProgressInterval,
+		)
+	}
 }
 
 func TestFromArgsRejectsMissingDefaultS3Endpoint(t *testing.T) {
@@ -121,6 +131,21 @@ endpoint = "https://s3.amazonaws.com"
 	}
 }
 
+func TestFromArgsRejectsInvalidMetadataWorkers(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeConfig(t, dir, `
+[metadata]
+workers = -2
+
+[storage.s3]
+endpoint = "https://s3.amazonaws.com"
+`)
+	_, err := appconfig.FromArgsWithBaseDir([]string{"--config", configPath}, dir)
+	if err == nil || !strings.Contains(err.Error(), "metadata-workers") {
+		t.Fatalf("error = %v, want invalid metadata workers error", err)
+	}
+}
+
 func TestFromArgsRejectsLegacyBackupConfiguration(t *testing.T) {
 	_, err := appconfig.FromArgsWithBaseDir([]string{"--backup-backend", "svn"}, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "unknown") {
@@ -137,6 +162,9 @@ func TestFromArgsResolvesPathsAndKeepsExistingOptions(t *testing.T) {
 		"--storage-s3-endpoint", "https://s3.amazonaws.com",
 		"--cache-bytes", "1MiB",
 		"--upload-direct-max-bytes", "2MiB",
+		"--metadata-workers", "4",
+		"--metadata-timeout", "45s",
+		"--metadata-progress-interval", "3s",
 	}, binDir)
 	if err != nil {
 		t.Fatalf("FromArgsWithBaseDir returned error: %v", err)
@@ -149,6 +177,11 @@ func TestFromArgsResolvesPathsAndKeepsExistingOptions(t *testing.T) {
 	}
 	if cfg.Cache.Bytes.Int64() != 1024*1024 || cfg.Upload.DirectMaxBytes.Int64() != 2*1024*1024 {
 		t.Fatalf("size options were not parsed")
+	}
+	if cfg.Metadata.Workers != 4 ||
+		time.Duration(cfg.Metadata.Timeout) != 45*time.Second ||
+		time.Duration(cfg.Metadata.ProgressInterval) != 3*time.Second {
+		t.Fatalf("metadata validation options were not parsed")
 	}
 }
 
@@ -176,13 +209,22 @@ func TestDurationRemainsUsable(t *testing.T) {
 		"--status-log-interval", "2m",
 		"--storage-s3-endpoint", "https://s3.amazonaws.com",
 		"--dashboard-info-refresh-interval", "7s",
+		"--metadata-workers", "6",
+		"--metadata-timeout", "45s",
+		"--metadata-progress-interval", "4s",
 	}, t.TempDir())
 	if err != nil ||
 		time.Duration(cfg.StatusLogInterval) != 2*time.Minute ||
-		time.Duration(cfg.Dashboard.InfoRefreshInterval) != 7*time.Second {
-		t.Fatalf("status/dashboard intervals = %s/%s, error = %v",
+		time.Duration(cfg.Dashboard.InfoRefreshInterval) != 7*time.Second ||
+		cfg.Metadata.Workers != 6 ||
+		time.Duration(cfg.Metadata.Timeout) != 45*time.Second ||
+		time.Duration(cfg.Metadata.ProgressInterval) != 4*time.Second {
+		t.Fatalf("status/dashboard/metadata validation settings = %s/%s/%d/%s/%s, error = %v",
 			cfg.StatusLogInterval,
 			cfg.Dashboard.InfoRefreshInterval,
+			cfg.Metadata.Workers,
+			cfg.Metadata.Timeout,
+			cfg.Metadata.ProgressInterval,
 			err,
 		)
 	}

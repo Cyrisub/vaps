@@ -78,7 +78,6 @@ func TestListAllAndStats(t *testing.T) {
 	}
 }
 
-
 func TestIssueReusesActiveTokenForSameClientAndIP(t *testing.T) {
 	store, err := auth.Open(t.TempDir()+"/auth.db", time.Minute)
 	if err != nil {

@@ -38,6 +38,7 @@ func (s PayloadStatus) IsCached() bool {
 
 type Payload struct {
 	Hash           string        `json:"hash"`
+	ETag           string        `json:"etag,omitempty"`
 	Checksum       string        `json:"checksum"`
 	LegacyChecksum string        `json:"-"`
 	Size           int64         `json:"size"`
@@ -49,6 +50,7 @@ type Payload struct {
 func (p *Payload) UnmarshalJSON(data []byte) error {
 	var value struct {
 		Hash           string        `json:"hash"`
+		ETag           string        `json:"etag"`
 		Checksum       string        `json:"checksum"`
 		LegacyChecksum string        `json:"content_hash"`
 		Size           int64         `json:"size"`
@@ -61,6 +63,7 @@ func (p *Payload) UnmarshalJSON(data []byte) error {
 	}
 	*p = Payload{
 		Hash:           value.Hash,
+		ETag:           value.ETag,
 		Checksum:       value.Checksum,
 		LegacyChecksum: value.LegacyChecksum,
 		Size:           value.Size,

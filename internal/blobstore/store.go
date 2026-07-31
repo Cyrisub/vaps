@@ -27,6 +27,7 @@ type Store struct {
 
 type Info struct {
 	Hash     string `json:"hash"`
+	ETag     string `json:"etag,omitempty"`
 	Checksum string `json:"checksum,omitempty"`
 	Size     int64  `json:"size"`
 	Created  bool   `json:"stored"`

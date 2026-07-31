@@ -230,8 +230,12 @@ func AccessLog(next http.Handler) http.Handler {
 		recorder := &accessLogResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		started := time.Now()
 		next.ServeHTTP(recorder, r)
+		level := accessLogLevel(recorder.status)
+		if level == "verbose" {
+			return
+		}
 		log.Printf(
-			"access method=%s path=%q status=%d bytes=%d duration=%s remote_addr=%q user_agent=%q",
+			"access method=%s path=%q status=%d bytes=%d duration=%s remote_addr=%q user_agent=%q level=%s",
 			r.Method,
 			r.URL.RequestURI(),
 			recorder.status,
@@ -239,8 +243,20 @@ func AccessLog(next http.Handler) http.Handler {
 			time.Since(started).Truncate(time.Microsecond),
 			r.RemoteAddr,
 			r.UserAgent(),
+			level,
 		)
 	})
+}
+
+func accessLogLevel(status int) string {
+	switch {
+	case status >= http.StatusInternalServerError:
+		return "error"
+	case status >= http.StatusBadRequest:
+		return "warning"
+	default:
+		return "verbose"
+	}
 }
 
 type accessLogResponseWriter struct {
@@ -808,14 +824,36 @@ func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.
 	if h.objects == nil {
 		return nil, blobstore.Info{}, os.ErrNotExist
 	}
-	reader, remote, err := h.objects.Open(ctx, hash)
+	remote, err := h.objects.Head(ctx, hash)
 	if err != nil {
 		if errors.Is(err, objectstore.ErrNotFound) {
 			return nil, blobstore.Info{}, os.ErrNotExist
 		}
 		return nil, blobstore.Info{}, err
 	}
-	return reader, blobstore.Info{Hash: remote.Hash, Checksum: remote.Checksum, Size: remote.Size}, nil
+	if err := validateRemotePayload(record, remote); err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	if err := h.recordPayloadETag(&record, remote); err != nil {
+		return nil, blobstore.Info{}, err
+	}
+	reader, opened, err := h.objects.Open(ctx, hash)
+	if err != nil {
+		if errors.Is(err, objectstore.ErrNotFound) {
+			return nil, blobstore.Info{}, os.ErrNotExist
+		}
+		return nil, blobstore.Info{}, err
+	}
+	if opened.ETag != remote.ETag {
+		_ = reader.Close()
+		return nil, blobstore.Info{}, objectstore.ErrIntegrityMismatch
+	}
+	return reader, blobstore.Info{
+		Hash:     remote.Hash,
+		ETag:     remote.ETag,
+		Checksum: remote.Checksum,
+		Size:     remote.Size,
+	}, nil
 }
 
 func (h *Handler) markCached(hash string) {

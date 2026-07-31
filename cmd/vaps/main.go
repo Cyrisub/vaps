@@ -67,14 +67,18 @@ func run() int {
 		_ = logWriter.Close()
 	}()
 
+	metadataStartedAt := time.Now()
+	log.Printf("metadata database opening path=%s", cfg.MetadataDB)
 	meta, err := metadata.Open(cfg.MetadataDB)
 	if err != nil {
 		log.Print(err)
 		return 1
 	}
 	defer meta.Close()
+	log.Printf("metadata database opened path=%s duration=%s", cfg.MetadataDB, formatElapsed(time.Since(metadataStartedAt)))
 
 	store := blobstore.NewWithMaxBytes(cfg.Storage.Local.Dir, cfg.Storage.Local.MaxCacheBytes.Int64())
+	log.Printf("object store initializing bucket=%s endpoint=%s", cfg.Storage.S3.Bucket, cfg.Storage.S3.Endpoint)
 	objects, err := objectstore.NewS3(ctx, objectstore.S3Config{
 		Bucket:         cfg.Storage.S3.Bucket,
 		Region:         cfg.Storage.S3.Region,
@@ -87,7 +91,12 @@ func run() int {
 		log.Print(err)
 		return 1
 	}
-	if err := validateMetadataPayloads(ctx, meta, objects); err != nil {
+	log.Printf("object store initialized")
+	if err := validateMetadataPayloadsWithOptions(ctx, meta, objects, metadataValidationOptions{
+		Workers:          cfg.Metadata.Workers,
+		RequestTimeout:   time.Duration(cfg.Metadata.Timeout),
+		ProgressInterval: time.Duration(cfg.Metadata.ProgressInterval),
+	}); err != nil {
 		log.Print(err)
 		return 1
 	}

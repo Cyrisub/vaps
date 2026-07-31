@@ -154,7 +154,7 @@ func (h *Handler) openRemoteRange(ctx context.Context, hash, header string) (io.
 	if err != nil {
 		return nil, blobstore.Info{}, byteRange{}, true, err
 	}
-	info := blobstore.Info{Hash: record.Hash, Checksum: record.Checksum, Size: record.Size}
+	info := blobstore.Info{Hash: record.Hash, ETag: record.ETag, Checksum: record.Checksum, Size: record.Size}
 	parsed, err := parseSingleRangeHeader(header, info.Size)
 	if err != nil {
 		return nil, info, byteRange{}, true, err
@@ -166,9 +166,13 @@ func (h *Handler) openRemoteRange(ctx context.Context, hash, header string) (io.
 		}
 		return nil, info, byteRange{}, true, err
 	}
-	if remote.Checksum != record.Checksum || remote.Size != record.Size {
+	if err := validateRemotePayload(record, remote); err != nil {
 		_ = reader.Close()
-		return nil, info, byteRange{}, true, objectstore.ErrIntegrityMismatch
+		return nil, info, byteRange{}, true, err
+	}
+	if err := h.recordPayloadETag(&record, remote); err != nil {
+		_ = reader.Close()
+		return nil, info, byteRange{}, true, err
 	}
 	return reader, info, parsed, true, nil
 }

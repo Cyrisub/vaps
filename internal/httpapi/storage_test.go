@@ -79,10 +79,51 @@ func TestDirectPushRejectsExistingHashWithDifferentDigest(t *testing.T) {
 	}
 }
 
+func TestPullValidatesRemoteChecksumBeforeOpen(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	meta := openMetadata(t)
+	objects := newMemoryObjectStore()
+	objects.objects[hash] = memoryObject{
+		info: objectstore.Info{
+			Hash:     hash,
+			ETag:     "etag-1",
+			Checksum: "05060708",
+			Size:     5,
+		},
+		data: []byte("hello"),
+	}
+	if err := meta.PutPayload(metadata.Payload{
+		Hash:     hash,
+		ETag:     "etag-1",
+		Checksum: "01020304",
+		Size:     5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newV2Handler(t, meta, nil, objects)
+	token := requestToken(t, handler)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+hash, nil)
+	request.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("pull status = %d, want 500", response.Code)
+	}
+	objects.mu.Lock()
+	headCalls, openCalls := objects.headCalls, objects.openCalls
+	objects.mu.Unlock()
+	if headCalls != 1 || openCalls != 0 {
+		t.Fatalf("Head/Open calls = %d/%d, want 1/0", headCalls, openCalls)
+	}
+}
+
 type memoryObjectStore struct {
-	mu      sync.Mutex
-	objects map[string]memoryObject
-	putErr  error
+	mu        sync.Mutex
+	objects   map[string]memoryObject
+	putErr    error
+	headCalls int
+	openCalls int
 }
 
 type memoryObject struct {
@@ -97,6 +138,7 @@ func newMemoryObjectStore() *memoryObjectStore {
 func (s *memoryObjectStore) Head(_ context.Context, hash string) (objectstore.Info, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.headCalls++
 	object, ok := s.objects[hash]
 	if !ok {
 		return objectstore.Info{}, objectstore.ErrNotFound
@@ -104,22 +146,23 @@ func (s *memoryObjectStore) Head(_ context.Context, hash string) (objectstore.In
 	return object.info, nil
 }
 
-func (s *memoryObjectStore) Put(_ context.Context, info objectstore.Info, reader io.Reader) error {
+func (s *memoryObjectStore) Put(_ context.Context, info objectstore.Info, reader io.Reader) (objectstore.Info, error) {
 	if s.putErr != nil {
-		return s.putErr
+		return objectstore.Info{}, s.putErr
 	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return objectstore.Info{}, err
 	}
 	s.mu.Lock()
 	s.objects[info.Hash] = memoryObject{info: info, data: data}
 	s.mu.Unlock()
-	return nil
+	return info, nil
 }
 
 func (s *memoryObjectStore) Open(_ context.Context, hash string) (io.ReadCloser, objectstore.Info, error) {
 	s.mu.Lock()
+	s.openCalls++
 	object, ok := s.objects[hash]
 	s.mu.Unlock()
 	if !ok {

@@ -113,14 +113,14 @@ func (s *S3Store) Head(ctx context.Context, hash string) (Info, error) {
 		}
 		return Info{}, fmt.Errorf("head s3 object %q: %w", hash, err)
 	}
-	return parseInfo(hash, output.Metadata, aws.ToInt64(output.ContentLength))
+	return parseInfo(hash, normalizeETag(aws.ToString(output.ETag)), output.Metadata, aws.ToInt64(output.ContentLength))
 }
 
-func (s *S3Store) Put(ctx context.Context, info Info, reader io.Reader) error {
+func (s *S3Store) Put(ctx context.Context, info Info, reader io.Reader) (Info, error) {
 	if err := validateInfo(info); err != nil {
-		return err
+		return Info{}, err
 	}
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+	output, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(s.key(info.Hash)),
 		Body:          reader,
@@ -132,9 +132,10 @@ func (s *S3Store) Put(ctx context.Context, info Info, reader io.Reader) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("put s3 object %q: %w", info.Hash, err)
+		return Info{}, fmt.Errorf("put s3 object %q: %w", info.Hash, err)
 	}
-	return nil
+	info.ETag = normalizeETag(aws.ToString(output.ETag))
+	return info, nil
 }
 
 func (s *S3Store) Open(ctx context.Context, hash string) (io.ReadCloser, Info, error) {
@@ -148,7 +149,7 @@ func (s *S3Store) Open(ctx context.Context, hash string) (io.ReadCloser, Info, e
 		}
 		return nil, Info{}, fmt.Errorf("get s3 object %q: %w", hash, err)
 	}
-	info, err := parseInfo(hash, output.Metadata, aws.ToInt64(output.ContentLength))
+	info, err := parseInfo(hash, normalizeETag(aws.ToString(output.ETag)), output.Metadata, aws.ToInt64(output.ContentLength))
 	if err != nil {
 		_ = output.Body.Close()
 		return nil, Info{}, err
@@ -181,6 +182,41 @@ func (s *S3Store) OpenRange(ctx context.Context, hash string, start, end int64) 
 		return nil, Info{}, fmt.Errorf("get s3 object range %q: %w", hash, err)
 	}
 	return output.Body, info, nil
+}
+
+func (s *S3Store) List(ctx context.Context) ([]Info, error) {
+	var objects []Info
+	var continuationToken *string
+	prefix := s.objectPrefix()
+	for {
+		output, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list s3 objects with prefix %q: %w", prefix, err)
+		}
+		for _, object := range output.Contents {
+			key := aws.ToString(object.Key)
+			hash := strings.TrimPrefix(key, prefix)
+			if hash == "" || strings.Contains(hash, "/") {
+				continue
+			}
+			objects = append(objects, Info{
+				Hash: hash,
+				ETag: normalizeETag(aws.ToString(object.ETag)),
+				Size: aws.ToInt64(object.Size),
+			})
+		}
+		if !aws.ToBool(output.IsTruncated) {
+			return objects, nil
+		}
+		if output.NextContinuationToken == nil || aws.ToString(output.NextContinuationToken) == "" {
+			return nil, errors.New("list s3 objects returned no continuation token")
+		}
+		continuationToken = output.NextContinuationToken
+	}
 }
 
 func (s *S3Store) Stats(ctx context.Context) (ObjectStats, error) {
@@ -230,7 +266,7 @@ func (s *S3Store) objectPrefix() string {
 	return s.prefix + "/"
 }
 
-func parseInfo(hash string, metadata map[string]string, contentLength int64) (Info, error) {
+func parseInfo(hash, etag string, metadata map[string]string, contentLength int64) (Info, error) {
 	checksum := metadata[metadataChecksum]
 	if metadata[metadataHash] != hash {
 		return Info{}, fmt.Errorf("%w: hash metadata is missing or invalid", ErrIntegrityMismatch)
@@ -240,13 +276,17 @@ func parseInfo(hash string, metadata map[string]string, contentLength int64) (In
 		return Info{}, fmt.Errorf("%w: size metadata is missing or invalid", ErrIntegrityMismatch)
 	}
 	if utils.ChecksumValid(checksum) {
-		return Info{Hash: hash, Checksum: checksum, Size: size}, nil
+		return Info{Hash: hash, ETag: etag, Checksum: checksum, Size: size}, nil
 	}
 	legacyChecksum := metadata[metadataLegacyHash]
 	if legacyChecksum == "" {
 		return Info{}, fmt.Errorf("%w: checksum metadata is missing or invalid", ErrIntegrityMismatch)
 	}
-	return Info{Hash: hash, LegacyChecksum: legacyChecksum, Size: size}, nil
+	return Info{Hash: hash, ETag: etag, LegacyChecksum: legacyChecksum, Size: size}, nil
+}
+
+func normalizeETag(etag string) string {
+	return strings.Trim(etag, `"`)
 }
 
 func validateInfo(info Info) error {

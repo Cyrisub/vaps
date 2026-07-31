@@ -25,15 +25,19 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 	defer staged.Discard()
 
 	created := false
+	etag := ""
 	if h.objects != nil {
 		remote, headErr := h.objects.Head(ctx, hash)
+		if headErr == nil {
+			etag = remote.ETag
+		}
 		switch {
 		case errors.Is(headErr, objectstore.ErrNotFound):
 			file, err := staged.Open()
 			if err != nil {
 				return blobstore.Info{}, err
 			}
-			putErr := h.objects.Put(ctx, objectstore.Info{
+			putInfo, putErr := h.objects.Put(ctx, objectstore.Info{
 				Hash:     staged.Hash,
 				Checksum: staged.Checksum,
 				Size:     staged.Size,
@@ -46,11 +50,16 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 				return blobstore.Info{}, closeErr
 			}
 			created = true
+			etag = putInfo.ETag
 		case headErr != nil:
 			return blobstore.Info{}, headErr
 		case remote.LegacyChecksum != "":
-			if _, err := h.reconcileLegacyObject(ctx, hash, staged.Checksum); err != nil {
+			_, migratedETag, err := h.reconcileLegacyObject(ctx, hash, staged.Checksum)
+			if err != nil {
 				return blobstore.Info{}, err
+			}
+			if migratedETag != "" {
+				etag = migratedETag
 			}
 		case remote.Checksum != staged.Checksum || remote.Size != staged.Size:
 			return blobstore.Info{}, fmt.Errorf("%w: existing object does not match upload", objectstore.ErrIntegrityMismatch)
@@ -67,6 +76,7 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 	} else {
 		log.Printf("local cache publish failed hash=%s error=%q", hash, publishErr)
 	}
+	info.ETag = etag
 	return info, nil
 }
 
@@ -85,6 +95,7 @@ func (h *Handler) commitPayloadMetadata(info blobstore.Info) error {
 	if errors.Is(err, metadata.ErrNotFound) {
 		return h.meta.PutPayload(metadata.Payload{
 			Hash:      info.Hash,
+			ETag:      info.ETag,
 			Checksum:  info.Checksum,
 			Size:      info.Size,
 			Status:    status,
@@ -98,12 +109,59 @@ func (h *Handler) commitPayloadMetadata(info blobstore.Info) error {
 		return fmt.Errorf("%w: metadata does not match upload", objectstore.ErrIntegrityMismatch)
 	}
 	record.Checksum = info.Checksum
+	if info.ETag != "" {
+		record.ETag = info.ETag
+	}
 	record.Size = info.Size
 	record.Status = status
 	if record.CreatedAt == nil {
 		record.CreatedAt = &now
 	}
 	return h.meta.PutPayload(record)
+}
+
+func validateRemotePayload(record metadata.Payload, remote objectstore.Info) error {
+	if remote.Hash != record.Hash {
+		return fmt.Errorf(
+			"%w: remote object hash %q does not match metadata hash %q",
+			objectstore.ErrIntegrityMismatch,
+			remote.Hash,
+			record.Hash,
+		)
+	}
+	if remote.Checksum != record.Checksum {
+		return fmt.Errorf(
+			"%w: remote object checksum %q does not match metadata checksum %q",
+			objectstore.ErrIntegrityMismatch,
+			remote.Checksum,
+			record.Checksum,
+		)
+	}
+	if remote.Size != record.Size {
+		return fmt.Errorf(
+			"%w: remote object size %d does not match metadata size %d",
+			objectstore.ErrIntegrityMismatch,
+			remote.Size,
+			record.Size,
+		)
+	}
+	if record.ETag != "" && remote.ETag != record.ETag {
+		return fmt.Errorf(
+			"%w: remote object ETag %q does not match metadata ETag %q",
+			objectstore.ErrIntegrityMismatch,
+			remote.ETag,
+			record.ETag,
+		)
+	}
+	return nil
+}
+
+func (h *Handler) recordPayloadETag(record *metadata.Payload, remote objectstore.Info) error {
+	if h.meta == nil || record.ETag != "" || remote.ETag == "" {
+		return nil
+	}
+	record.ETag = remote.ETag
+	return h.meta.PutPayload(*record)
 }
 
 func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payload, error) {
@@ -117,19 +175,29 @@ func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payl
 			if headErr != nil {
 				return metadata.Payload{}, headErr
 			}
+			changed := false
 			switch {
 			case remote.Checksum != "":
 				record.Checksum = remote.Checksum
 				record.LegacyChecksum = ""
+				changed = true
 			case remote.LegacyChecksum != "":
-				checksum, migrateErr := h.reconcileLegacyObject(ctx, hash, "")
+				checksum, etag, migrateErr := h.reconcileLegacyObject(ctx, hash, "")
 				if migrateErr != nil {
 					return metadata.Payload{}, migrateErr
 				}
 				record.Checksum = checksum
 				record.LegacyChecksum = ""
+				if etag != "" {
+					record.ETag = etag
+				}
+				changed = true
 			}
-			if record.Checksum != "" {
+			if record.ETag == "" && remote.ETag != "" {
+				record.ETag = remote.ETag
+				changed = true
+			}
+			if changed {
 				if err := h.meta.PutPayload(record); err != nil {
 					return metadata.Payload{}, err
 				}
@@ -148,16 +216,20 @@ func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payl
 		return metadata.Payload{}, err
 	}
 	if remote.LegacyChecksum != "" {
-		checksum, migrateErr := h.reconcileLegacyObject(ctx, hash, "")
+		checksum, etag, migrateErr := h.reconcileLegacyObject(ctx, hash, "")
 		if migrateErr != nil {
 			return metadata.Payload{}, migrateErr
 		}
 		remote.Checksum = checksum
 		remote.LegacyChecksum = ""
+		if etag != "" {
+			remote.ETag = etag
+		}
 	}
 	now := time.Now().UTC()
 	record = metadata.Payload{
 		Hash:      remote.Hash,
+		ETag:      remote.ETag,
 		Checksum:  remote.Checksum,
 		Size:      remote.Size,
 		Status:    metadata.StatusStored,
@@ -169,46 +241,46 @@ func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payl
 	return record, nil
 }
 
-func (h *Handler) reconcileLegacyObject(ctx context.Context, hash, expectedChecksum string) (string, error) {
+func (h *Handler) reconcileLegacyObject(ctx context.Context, hash, expectedChecksum string) (string, string, error) {
 	if h.objects == nil {
-		return "", errors.New("object store is not configured")
+		return "", "", errors.New("object store is not configured")
 	}
 	reader, remote, err := h.objects.Open(ctx, hash)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	hasher := utils.NewChecksum()
 	size, copyErr := io.Copy(hasher, reader)
 	closeErr := reader.Close()
 	if copyErr != nil {
-		return "", copyErr
+		return "", "", copyErr
 	}
 	if closeErr != nil {
-		return "", closeErr
+		return "", "", closeErr
 	}
 	if size != remote.Size {
-		return "", fmt.Errorf("%w: legacy object size does not match metadata", objectstore.ErrIntegrityMismatch)
+		return "", "", fmt.Errorf("%w: legacy object size does not match metadata", objectstore.ErrIntegrityMismatch)
 	}
 	checksum := utils.ChecksumDigestHex(hasher)
 	if expectedChecksum != "" && checksum != expectedChecksum {
-		return "", fmt.Errorf("%w: legacy object checksum does not match upload", objectstore.ErrIntegrityMismatch)
+		return "", "", fmt.Errorf("%w: legacy object checksum does not match upload", objectstore.ErrIntegrityMismatch)
 	}
 
 	reader, _, err = h.objects.Open(ctx, hash)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	putErr := h.objects.Put(ctx, objectstore.Info{
+	putInfo, putErr := h.objects.Put(ctx, objectstore.Info{
 		Hash:     hash,
 		Checksum: checksum,
 		Size:     size,
 	}, reader)
 	closeErr = reader.Close()
 	if putErr != nil {
-		return "", putErr
+		return "", "", putErr
 	}
 	if closeErr != nil {
-		return "", closeErr
+		return "", "", closeErr
 	}
-	return checksum, nil
+	return checksum, putInfo.ETag, nil
 }

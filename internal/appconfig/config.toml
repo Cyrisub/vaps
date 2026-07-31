@@ -10,6 +10,13 @@ log_dir = "logs"
 log_retention_days = 7
 status_log_interval = "1m"
 
+[metadata]
+# -1 uses physical CPU cores; 0 forces single-threaded validation.
+workers = -1
+# Timeout for each S3 HEAD request.
+timeout = "10s"
+progress_interval = "10s"
+
 [cache]
 bytes = "0"
 max_object_bytes = "4MiB"

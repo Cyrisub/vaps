@@ -2,8 +2,13 @@ package objectstore
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func TestNewS3RejectsInvalidEndpoint(t *testing.T) {
@@ -38,7 +43,7 @@ func TestNewS3RejectsMissingCredentials(t *testing.T) {
 
 func TestParseInfoUsesCRC32CChecksumMetadata(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
-	info, err := parseInfo(hash, map[string]string{
+	info, err := parseInfo(hash, "etag-1", map[string]string{
 		metadataHash:     hash,
 		metadataChecksum: "9a71bb4c",
 		metadataSize:     "5",
@@ -46,7 +51,7 @@ func TestParseInfoUsesCRC32CChecksumMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseInfo returned error: %v", err)
 	}
-	if info.Hash != hash || info.Checksum != "9a71bb4c" || info.Size != 5 {
+	if info.Hash != hash || info.ETag != "etag-1" || info.Checksum != "9a71bb4c" || info.Size != 5 {
 		t.Fatalf("parseInfo = %#v", info)
 	}
 }
@@ -67,7 +72,7 @@ func TestParseInfoAcceptsLegacyOrRejectsInvalidChecksumMetadata(t *testing.T) {
 			} else {
 				values[metadata] = "not-a-checksum"
 			}
-			info, err := parseInfo(hash, values, 5)
+			info, err := parseInfo(hash, "", values, 5)
 			if name == "legacy" {
 				if err != nil || info.LegacyChecksum != "full-blake3" {
 					t.Fatalf("parseInfo legacy = %#v, %v", info, err)
@@ -79,4 +84,59 @@ func TestParseInfoAcceptsLegacyOrRejectsInvalidChecksumMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestS3ListPaginatesAndNormalizesETag(t *testing.T) {
+	const (
+		firstHash  = "0123456789abcdef0123456789abcdef01234567"
+		secondHash = "fedcba9876543210fedcba9876543210fedcba98"
+	)
+	responses := []string{
+		`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+<Name>bucket</Name><Prefix>Payload/</Prefix><KeyCount>1</KeyCount><MaxKeys>1</MaxKeys>
+<IsTruncated>true</IsTruncated><NextContinuationToken>next-page</NextContinuationToken>
+<Contents><Key>Payload/` + firstHash + `</Key><ETag>"etag-1"</ETag><Size>5</Size></Contents>
+</ListBucketResult>`,
+		`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+<Name>bucket</Name><Prefix>Payload/</Prefix><KeyCount>1</KeyCount><MaxKeys>1</MaxKeys>
+<IsTruncated>false</IsTruncated>
+<Contents><Key>Payload/` + secondHash + `</Key><ETag>"etag-2"</ETag><Size>7</Size></Contents>
+</ListBucketResult>`,
+	}
+	client := s3.NewFromConfig(aws.Config{
+		Region: "us-east-1",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			body := responses[0]
+			responses = responses[1:]
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+	}, func(options *s3.Options) {
+		options.BaseEndpoint = aws.String("https://s3.example")
+		options.UsePathStyle = true
+	})
+	store, err := NewS3WithClient(client, S3Config{Bucket: "bucket", Prefix: "Payload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(objects) != 2 ||
+		objects[0].Hash != firstHash || objects[0].ETag != "etag-1" ||
+		objects[1].Hash != secondHash || objects[1].ETag != "etag-2" {
+		t.Fatalf("List() = %#v", objects)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }

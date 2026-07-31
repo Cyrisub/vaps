@@ -15,6 +15,7 @@ var (
 // Info is the immutable identity of a stored payload.
 type Info struct {
 	Hash           string
+	ETag           string
 	Checksum       string
 	LegacyChecksum string
 	Size           int64
@@ -29,8 +30,13 @@ type ObjectStats struct {
 // means the backend has durably accepted the object.
 type Store interface {
 	Head(context.Context, string) (Info, error)
-	Put(context.Context, Info, io.Reader) error
+	Put(context.Context, Info, io.Reader) (Info, error)
 	Open(context.Context, string) (io.ReadCloser, Info, error)
+}
+
+// ListStore lists objects under the store's configured prefix.
+type ListStore interface {
+	List(context.Context) ([]Info, error)
 }
 
 type StatsStore interface {

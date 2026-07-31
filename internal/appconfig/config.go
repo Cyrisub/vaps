@@ -29,11 +29,18 @@ type Config struct {
 	LogDir            string          `toml:"log_dir" hidden:"" name:"log-dir"`
 	LogRetentionDays  int             `toml:"log_retention_days" hidden:"" name:"log-retention-days"`
 	StatusLogInterval Duration        `toml:"status_log_interval" hidden:"" name:"status-log-interval"`
+	Metadata          MetadataConfig  `toml:"metadata" embed:"" prefix:"metadata-"`
 	Cache             CacheConfig     `toml:"cache" embed:"" prefix:"cache-"`
 	Auth              AuthConfig      `toml:"auth" embed:"" prefix:"auth-"`
 	Upload            UploadConfig    `toml:"upload" embed:"" prefix:"upload-"`
 	Dashboard         DashboardConfig `toml:"dashboard" embed:"" prefix:"dashboard-"`
 	Storage           StorageConfig   `toml:"storage" embed:"" prefix:"storage-"`
+}
+
+type MetadataConfig struct {
+	Workers          int      `toml:"workers" hidden:"" name:"workers"`
+	Timeout          Duration `toml:"timeout" hidden:"" name:"timeout"`
+	ProgressInterval Duration `toml:"progress_interval" hidden:"" name:"progress-interval"`
 }
 
 type AuthConfig struct {
@@ -216,6 +223,15 @@ func validate(cfg Config) error {
 	}
 	if time.Duration(cfg.Dashboard.InfoRefreshInterval) <= 0 {
 		return errors.New("dashboard-info-refresh-interval must be positive")
+	}
+	if cfg.Metadata.Workers < -1 {
+		return errors.New("metadata-workers must be -1 or non-negative")
+	}
+	if time.Duration(cfg.Metadata.Timeout) <= 0 {
+		return errors.New("metadata-timeout must be positive")
+	}
+	if time.Duration(cfg.Metadata.ProgressInterval) <= 0 {
+		return errors.New("metadata-progress-interval must be positive")
 	}
 	if cfg.Storage.S3.Bucket == "" {
 		return errors.New("storage-s3-bucket is required")

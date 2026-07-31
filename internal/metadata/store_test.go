@@ -18,7 +18,7 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := time.Unix(123, 0).UTC()
-	record := metadata.Payload{Hash: helloHash, Checksum: "01020304", Size: 5, Status: metadata.StatusCached, CreatedAt: &created}
+	record := metadata.Payload{Hash: helloHash, ETag: "etag-1", Checksum: "01020304", Size: 5, Status: metadata.StatusCached, CreatedAt: &created}
 	if err := store.PutPayload(record); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestStorePersistsPayloadRecordAcrossReopen(t *testing.T) {
 	}
 	defer reopened.Close()
 	got, err := reopened.GetPayload(helloHash)
-	if err != nil || got.Hash != record.Hash || got.Checksum != record.Checksum || got.Size != record.Size || got.Status != record.Status || got.CreatedAt == nil || !got.CreatedAt.Equal(*record.CreatedAt) {
+	if err != nil || got.Hash != record.Hash || got.ETag != record.ETag || got.Checksum != record.Checksum || got.Size != record.Size || got.Status != record.Status || got.CreatedAt == nil || !got.CreatedAt.Equal(*record.CreatedAt) {
 		t.Fatalf("GetPayload = %#v, %v; want %#v", got, err, record)
 	}
 }
@@ -86,6 +86,16 @@ func TestPayloadStatusMarshalsAsSingleEnum(t *testing.T) {
 	}
 	if _, ok := decoded["backup_status"]; ok {
 		t.Fatalf("backup_status must not be persisted")
+	}
+}
+
+func TestPayloadUnmarshalsMissingETagAsEmpty(t *testing.T) {
+	var payload metadata.Payload
+	if err := json.Unmarshal([]byte(`{"hash":"`+helloHash+`","checksum":"01020304","size":5,"status":0}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ETag != "" {
+		t.Fatalf("missing ETag = %q, want empty", payload.ETag)
 	}
 }
 

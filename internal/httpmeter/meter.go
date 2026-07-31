@@ -52,18 +52,18 @@ type Stats struct {
 type Meter struct {
 	startedAt time.Time
 
-	active atomic.Int64
-	count  atomic.Int64
-	ok     atomic.Int64
-	client atomic.Int64
-	server atomic.Int64
-	other  atomic.Int64
+	active   atomic.Int64
+	count    atomic.Int64
+	ok       atomic.Int64
+	client   atomic.Int64
+	server   atomic.Int64
+	other    atomic.Int64
 	bytesIn  atomic.Int64
 	bytesOut atomic.Int64
 
-	mu       sync.Mutex
+	mu        sync.Mutex
 	latencies []float64
-	window   []time.Time
+	window    []time.Time
 }
 
 func New() *Meter {

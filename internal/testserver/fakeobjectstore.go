@@ -36,15 +36,15 @@ func (f *FakeObjectStore) Head(_ context.Context, hash string) (objectstore.Info
 	return object.info, nil
 }
 
-func (f *FakeObjectStore) Put(_ context.Context, info objectstore.Info, reader io.Reader) error {
+func (f *FakeObjectStore) Put(_ context.Context, info objectstore.Info, reader io.Reader) (objectstore.Info, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return objectstore.Info{}, err
 	}
 	f.mu.Lock()
 	f.objects[info.Hash] = fakeObject{info: info, data: append([]byte(nil), data...)}
 	f.mu.Unlock()
-	return nil
+	return info, nil
 }
 
 func (f *FakeObjectStore) Open(_ context.Context, hash string) (io.ReadCloser, objectstore.Info, error) {
