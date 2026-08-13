@@ -66,21 +66,21 @@
         <p class="value" id="stored-bytes">0 B</p>
         <p class="hint">stored across all payload metadata</p>
       </article>
-      <article class="stats-tile">
+      <a class="stats-tile clickable detailed" href="/dashboard/telemetry#cache">
         <p class="label">Cached Payloads</p>
         <p class="value" id="cached-count">0</p>
-        <p class="hint">metadata marked cache-resident</p>
-      </article>
+        <p class="hint">in-memory cache entries</p>
+      </a>
       <a class="stats-tile clickable detailed" id="cache-summary-usage" href="/dashboard/telemetry#cache" hidden>
         <p class="label">Cache Usage</p>
         <p class="value"><span id="cache-used">0 B</span> / <span id="cache-max">0 B</span></p>
         <div class="meter" aria-label="cache usage"><span id="cache-meter"></span></div>
         <p class="hint"><span id="cache-percent">0.0</span>% used · <span id="cache-entries">0</span> entries</p>
       </a>
-      <a class="stats-tile clickable detailed" id="cache-summary-hit-rate" href="/dashboard/telemetry#cache" hidden>
+      <a class="stats-tile clickable detailed" id="cache-summary-hit-rate" href="/dashboard/telemetry#pull">
         <p class="label">Hit Rate</p>
         <p class="value"><span id="hit-rate">0.0</span>%</p>
-        <p class="hint"><span id="cache-hits">0</span> hits / <span id="cache-misses">0</span> misses</p>
+        <p class="hint"><span id="pull-hits">0</span> hits / <span id="pull-misses">0</span> misses</p>
       </a>
       <a class="stats-tile clickable detailed" href="/dashboard/auth">
         <p class="label">Auth Tokens</p>
@@ -110,8 +110,6 @@
         <tr><th>Used bytes</th><td id="cache-used-row">0</td></tr>
         <tr><th>Capacity</th><td id="cache-max-row">0</td></tr>
         <tr><th>Max object bytes</th><td id="cache-max-object-row">0</td></tr>
-        <tr><th>Hits</th><td id="cache-hits-row">0</td></tr>
-        <tr><th>Misses</th><td id="cache-misses-row">0</td></tr>
       </table>
     </div>
   </section>
@@ -166,12 +164,16 @@
       const metadata = stats.metadata || {};
       const cache = stats.cache || {};
       const cacheEnabled = Boolean(stats.cache);
+      const pull = stats.pull || {};
+      const pullMemory = pull.memory || {};
+      const pullDisk = pull.disk || {};
       const authStats = stats.auth || {};
       const errors = stats.errors || {};
       const http = stats.http || {};
       const requests = http.requests || {};
       const cachePercent = percent(cache.used_bytes || 0, cache.max_bytes || 0);
-      const hitRate = percent(cache.hits || 0, (cache.hits || 0) + (cache.misses || 0));
+      const pullHitRate = percent(pull.hits || 0, (pull.hits || 0) + (pull.misses || 0));
+      const cachedPayloads = cacheEnabled ? (cache.entries || 0) : 0;
       const requestError = errors.server_errors || 0;
       const requestWarn = errors.client_errors || 0;
       const readableStats = {
@@ -188,7 +190,14 @@
         metadata: {
           payloads: metadata.payload_count || 0,
           stored: formatBytes(metadata.total_bytes || 0),
-          cached_payloads: metadata.cached_count || 0
+          cached_payloads: cachedPayloads
+        },
+        pull: {
+          hit_rate: `${pullHitRate.toFixed(1)}%`,
+          hits: pull.hits || 0,
+          misses: pull.misses || 0,
+          memory: { hits: pullMemory.hits || 0, misses: pullMemory.misses || 0 },
+          disk: { hits: pullDisk.hits || 0, misses: pullDisk.misses || 0 }
         },
         auth: {
           active: authStats.active_count || 0,
@@ -213,14 +222,17 @@
       text("http-p99", formatDuration(requests.t_p99));
       text("payload-count", metadata.payload_count || 0);
       text("stored-bytes", formatBytes(metadata.total_bytes || 0));
-      text("cached-count", metadata.cached_count || 0);
+      text("cached-count", cachedPayloads);
+      text("hit-rate", pullHitRate.toFixed(1));
+      text("pull-hits", pull.hits || 0);
+      text("pull-misses", pull.misses || 0);
       text("auth-active", authStats.active_count || 0);
       text("auth-total", authStats.total_count || 0);
       text("auth-parked", authStats.parked_count || 0);
       text("auth-revoked", authStats.revoked_count || 0);
       setCount("request-error", requestError, "is-active");
       setCount("request-warn", requestWarn, "is-active");
-      for (const id of ["cache-summary-usage", "cache-summary-hit-rate", "cache-details"]) {
+      for (const id of ["cache-summary-usage", "cache-details"]) {
         document.getElementById(id).hidden = !cacheEnabled;
       }
       if (cacheEnabled) {
@@ -228,25 +240,17 @@
           entries: cache.entries || 0,
           used: formatBytes(cache.used_bytes || 0),
           capacity: formatBytes(cache.max_bytes || 0),
-          max_object: formatBytes(cache.max_object_bytes || 0),
-          hit_rate: `${hitRate.toFixed(1)}%`,
-          hits: cache.hits || 0,
-          misses: cache.misses || 0
+          max_object: formatBytes(cache.max_object_bytes || 0)
         };
         text("cache-used", formatBytes(cache.used_bytes || 0));
         text("cache-max", formatBytes(cache.max_bytes || 0));
         text("cache-percent", cachePercent.toFixed(1));
         text("cache-entries", cache.entries || 0);
-        text("hit-rate", hitRate.toFixed(1));
-        text("cache-hits", cache.hits || 0);
-        text("cache-misses", cache.misses || 0);
         text("cache-max-object", formatBytes(cache.max_object_bytes || 0));
         text("cache-entries-row", cache.entries || 0);
         text("cache-used-row", formatBytes(cache.used_bytes || 0));
         text("cache-max-row", formatBytes(cache.max_bytes || 0));
         text("cache-max-object-row", formatBytes(cache.max_object_bytes || 0));
-        text("cache-hits-row", cache.hits || 0);
-        text("cache-misses-row", cache.misses || 0);
         document.getElementById("cache-meter").style.width = `${cachePercent.toFixed(1)}%`;
       }
       text("stats", JSON.stringify(readableStats, null, 2));

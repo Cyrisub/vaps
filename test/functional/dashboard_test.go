@@ -121,6 +121,10 @@ func TestFunctionalDashboardStatsAndQuery(t *testing.T) {
 		Cache struct {
 			Entries int `json:"entries"`
 		} `json:"cache"`
+		Pull struct {
+			Hits   int64 `json:"hits"`
+			Misses int64 `json:"misses"`
+		} `json:"pull"`
 		Auth struct {
 			TotalCount  int `json:"total_count"`
 			ActiveCount int `json:"active_count"`
@@ -142,6 +146,12 @@ func TestFunctionalDashboardStatsAndQuery(t *testing.T) {
 	}
 	if stats.HTTP.Requests.Count < 1 {
 		t.Fatalf("http request count = %d, want >= 1", stats.HTTP.Requests.Count)
+	}
+	if stats.Cache.Entries < 1 {
+		t.Fatalf("cache entries = %d, want >= 1 after pull", stats.Cache.Entries)
+	}
+	if stats.Pull.Hits < 1 {
+		t.Fatalf("pull hits = %d, want >= 1 after pull", stats.Pull.Hits)
 	}
 
 	queryPath := "/dashboard/metadata/query?q=" + strings.ToUpper(hash[:8]) + "&status=cache&min_size=5&max_size=20&limit=10"

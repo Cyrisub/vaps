@@ -245,6 +245,24 @@ func TestDashboardSharedShellAssets(t *testing.T) {
 	if !bytes.Contains(overview.Body.Bytes(), []byte("/dashboard/?page=sessions&status=all")) {
 		t.Fatalf("overview missing sessions link")
 	}
+	if !bytes.Contains(overview.Body.Bytes(), []byte("in-memory cache entries")) {
+		t.Fatalf("overview missing in-memory cached payload copy")
+	}
+	if !bytes.Contains(overview.Body.Bytes(), []byte("/dashboard/telemetry#pull")) {
+		t.Fatalf("overview missing pull telemetry link")
+	}
+
+	telemetry := httptest.NewRecorder()
+	handler.ServeHTTP(telemetry, httptest.NewRequest(http.MethodGet, "/dashboard/telemetry", nil))
+	if !bytes.Contains(telemetry.Body.Bytes(), []byte(`id="pull"`)) {
+		t.Fatalf("telemetry missing pull hit-rate section")
+	}
+	if !bytes.Contains(telemetry.Body.Bytes(), []byte("Memory Hit Rate")) {
+		t.Fatalf("telemetry missing memory hit rate")
+	}
+	if !bytes.Contains(telemetry.Body.Bytes(), []byte("Disk Hit Rate")) {
+		t.Fatalf("telemetry missing disk hit rate")
+	}
 }
 
 func TestDashboardStatsIncludesAuthAndErrors(t *testing.T) {

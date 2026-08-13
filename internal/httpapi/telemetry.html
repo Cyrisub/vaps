@@ -53,16 +53,37 @@
     </div>
   </section>
 
+  <section class="vaps-sector" id="pull">
+    <div class="vaps-sector-header">
+      <h2>Payload Pull</h2>
+      <span class="hint">successful /v2/payload/pull results from memory, disk, or the object store</span>
+    </div>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">Overall Hit Rate</p><p class="metric-value" id="pull-hit-rate">0.0%</p></div>
+        <div class="metric-card"><p class="metric-label">Overall Hits</p><p class="metric-value" id="pull-hits">0</p></div>
+        <div class="metric-card"><p class="metric-label">Overall Misses</p><p class="metric-value" id="pull-misses">0</p></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="metric-grid">
+        <div class="metric-card"><p class="metric-label">Memory Hit Rate</p><p class="metric-value" id="memory-hit-rate">0.0%</p></div>
+        <div class="metric-card"><p class="metric-label">Memory Hits</p><p class="metric-value" id="memory-hits">0</p></div>
+        <div class="metric-card"><p class="metric-label">Memory Misses</p><p class="metric-value" id="memory-misses">0</p></div>
+        <div class="metric-card"><p class="metric-label">Disk Hit Rate</p><p class="metric-value" id="disk-hit-rate">0.0%</p></div>
+        <div class="metric-card"><p class="metric-label">Disk Hits</p><p class="metric-value" id="disk-hits">0</p></div>
+        <div class="metric-card"><p class="metric-label">Disk Misses</p><p class="metric-value" id="disk-misses">0</p></div>
+      </div>
+    </div>
+  </section>
+
   <section class="vaps-sector" id="cache" hidden>
-    <h2>Cache</h2>
+    <h2>Memory Cache</h2>
     <div class="panel">
       <div class="metric-grid">
         <div class="metric-card"><p class="metric-label">Entries</p><p class="metric-value" id="cache-entries">0</p></div>
         <div class="metric-card"><p class="metric-label">Used</p><p class="metric-value" id="cache-used">0 B</p></div>
         <div class="metric-card"><p class="metric-label">Capacity</p><p class="metric-value" id="cache-max">0 B</p></div>
-        <div class="metric-card"><p class="metric-label">Hit Rate</p><p class="metric-value" id="cache-hit-rate">0.0%</p></div>
-        <div class="metric-card"><p class="metric-label">Hits</p><p class="metric-value" id="cache-hits">0</p></div>
-        <div class="metric-card"><p class="metric-label">Misses</p><p class="metric-value" id="cache-misses">0</p></div>
       </div>
     </div>
   </section>
@@ -117,7 +138,12 @@
       const bytes = http.bytes || {};
       const cache = stats.cache || {};
       const cacheEnabled = Boolean(stats.cache);
-      const hitRate = percent(cache.hits || 0, (cache.hits || 0) + (cache.misses || 0));
+      const pull = stats.pull || {};
+      const pullMemory = pull.memory || {};
+      const pullDisk = pull.disk || {};
+      const pullHitRate = percent(pull.hits || 0, (pull.hits || 0) + (pull.misses || 0));
+      const memoryHitRate = percent(pullMemory.hits || 0, (pullMemory.hits || 0) + (pullMemory.misses || 0));
+      const diskHitRate = percent(pullDisk.hits || 0, (pullDisk.hits || 0) + (pullDisk.misses || 0));
 
       text("http-total", requests.count || 0);
       text("http-active", requests.active || 0);
@@ -135,14 +161,20 @@
       text("status-error", status.server_error || 0);
       text("bytes-in", formatBytes(bytes.in || 0));
       text("bytes-out", formatBytes(bytes.out || 0));
+      text("pull-hit-rate", `${pullHitRate.toFixed(1)}%`);
+      text("pull-hits", pull.hits || 0);
+      text("pull-misses", pull.misses || 0);
+      text("memory-hit-rate", `${memoryHitRate.toFixed(1)}%`);
+      text("memory-hits", pullMemory.hits || 0);
+      text("memory-misses", pullMemory.misses || 0);
+      text("disk-hit-rate", `${diskHitRate.toFixed(1)}%`);
+      text("disk-hits", pullDisk.hits || 0);
+      text("disk-misses", pullDisk.misses || 0);
       document.getElementById("cache").hidden = !cacheEnabled;
       if (cacheEnabled) {
         text("cache-entries", cache.entries || 0);
         text("cache-used", formatBytes(cache.used_bytes || 0));
         text("cache-max", formatBytes(cache.max_bytes || 0));
-        text("cache-hit-rate", `${hitRate.toFixed(1)}%`);
-        text("cache-hits", cache.hits || 0);
-        text("cache-misses", cache.misses || 0);
       }
       text("stats", JSON.stringify(stats, null, 2));
     }

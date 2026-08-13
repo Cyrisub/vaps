@@ -31,12 +31,22 @@ func (h *Handler) headPullPayload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reader, info, err := h.openPayload(r, hash)
+	memoryChecked := h.cache.Enabled()
+	if cached, ok := h.memoryPayload(hash); ok {
+		h.pull.recordMemoryHit()
+		info := blobstore.Info{Hash: hash, Size: int64(len(cached))}
+		setPayloadHeaders(w, info)
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	reader, info, fromDisk, err := h.openPayload(r, hash)
 	if err != nil {
 		writePayloadOpenError(w, r, err)
 		return
 	}
 	_ = reader.Close()
+	h.recordPullOrigin(fromDisk, memoryChecked)
 	setPayloadHeaders(w, info)
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.WriteHeader(http.StatusOK)
@@ -48,27 +58,27 @@ func (h *Handler) getPullPayload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rangeHeader := r.Header.Get("Range")
-	if h.cache != nil {
-		if cached, ok := h.cache.Get(hash); ok {
-			info := blobstore.Info{Hash: hash, Size: int64(len(cached))}
-			setPayloadHeaders(w, info)
-			if rangeHeader == "" {
-				writeFullPayload(w, cached, info.Size)
-				return
-			}
-			parsed, err := parseSingleRangeHeader(rangeHeader, info.Size)
-			if err != nil {
-				if errors.Is(err, errRangeNotSatisfiable) {
-					w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(info.Size, 10))
-					w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-					return
-				}
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			writeRangeResponse(w, cached, info.Size, parsed)
+	memoryChecked := h.cache.Enabled()
+	if cached, ok := h.memoryPayload(hash); ok {
+		h.pull.recordMemoryHit()
+		info := blobstore.Info{Hash: hash, Size: int64(len(cached))}
+		setPayloadHeaders(w, info)
+		if rangeHeader == "" {
+			writeFullPayload(w, cached, info.Size)
 			return
 		}
+		parsed, err := parseSingleRangeHeader(rangeHeader, info.Size)
+		if err != nil {
+			if errors.Is(err, errRangeNotSatisfiable) {
+				w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(info.Size, 10))
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeRangeResponse(w, cached, info.Size, parsed)
+		return
 	}
 	if rangeHeader != "" {
 		reader, info, parsed, handled, err := h.openRemoteRange(r.Context(), hash, rangeHeader)
@@ -82,6 +92,7 @@ func (h *Handler) getPullPayload(w http.ResponseWriter, r *http.Request) {
 				writePayloadOpenError(w, r, err)
 				return
 			}
+			h.pull.recordRemote(memoryChecked)
 			defer reader.Close()
 			setPayloadHeaders(w, info)
 			w.Header().Set("Accept-Ranges", "bytes")
@@ -92,12 +103,13 @@ func (h *Handler) getPullPayload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	reader, info, err := h.openPayload(r, hash)
+	reader, info, fromDisk, err := h.openPayload(r, hash)
 	if err != nil {
 		writePayloadOpenError(w, r, err)
 		return
 	}
 	defer reader.Close()
+	h.recordPullOrigin(fromDisk, memoryChecked)
 	setPayloadHeaders(w, info)
 	if rangeHeader != "" {
 		data, readErr := io.ReadAll(reader)
@@ -136,6 +148,21 @@ func (h *Handler) getPullPayload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.Copy(w, reader)
+}
+
+func (h *Handler) memoryPayload(hash string) ([]byte, bool) {
+	if !h.cache.Enabled() {
+		return nil, false
+	}
+	return h.cache.Get(hash)
+}
+
+func (h *Handler) recordPullOrigin(fromDisk, memoryChecked bool) {
+	if fromDisk {
+		h.pull.recordDiskHit(memoryChecked)
+		return
+	}
+	h.pull.recordRemote(memoryChecked)
 }
 
 func (h *Handler) openRemoteRange(ctx context.Context, hash, header string) (io.ReadCloser, blobstore.Info, byteRange, bool, error) {
@@ -177,14 +204,15 @@ func (h *Handler) openRemoteRange(ctx context.Context, hash, header string) (io.
 	return reader, info, parsed, true, nil
 }
 
-func (h *Handler) openPayload(r *http.Request, hash string) (io.ReadCloser, blobstore.Info, error) {
+func (h *Handler) openPayload(r *http.Request, hash string) (io.ReadCloser, blobstore.Info, bool, error) {
 	if h.meta != nil {
 		if _, metadataErr := h.payloadRecord(r.Context(), hash); metadataErr != nil {
-			return nil, blobstore.Info{}, metadataErr
+			return nil, blobstore.Info{}, false, metadataErr
 		}
-		return h.openPayloadWithMetadata(r.Context(), hash)
+		return h.openDiskOrRemote(r.Context(), hash)
 	}
-	return h.store.Open(hash)
+	reader, info, err := h.store.Open(hash)
+	return reader, info, err == nil, err
 }
 
 func writePayloadOpenError(w http.ResponseWriter, r *http.Request, err error) {

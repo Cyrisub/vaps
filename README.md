@@ -447,9 +447,15 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
   ```json
   {
     "metadata": {"payload_count": 1, "total_bytes": 123, "cached_count": 1},
-    "cache": {"entries": 1, "used_bytes": 123, "max_bytes": 67108864, "max_object_bytes": 4194304, "hits": 0, "misses": 0}
+    "cache": {"entries": 1, "used_bytes": 123, "max_bytes": 67108864, "max_object_bytes": 4194304, "hits": 0, "misses": 0},
+    "pull": {"hits": 1, "misses": 0, "memory": {"hits": 0, "misses": 1}, "disk": {"hits": 1, "misses": 0}}
   }
   ```
+
+  `cache` is omitted when the in-memory cache is disabled. `pull` counts
+  successful `/v2/payload/pull` results: a hit is served from memory or the
+  local disk cache, and a miss is served from the object store. `pull.memory`
+  and `pull.disk` are the per-layer lookups behind that overall rate.
 
 - `GET /dashboard/metadata`
 

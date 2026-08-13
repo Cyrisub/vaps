@@ -640,7 +640,7 @@ button.linkish:hover { color: var(--theme_p0); }
   justify-content: center;
   padding: 24px;
 }
-.modal-backdrop[hidden] { display: none; }
+[hidden] { display: none !important; }
 .modal-card {
   width: min(720px, 100%);
   max-height: min(80vh, 900px);

@@ -33,6 +33,7 @@ type Handler struct {
 	uploads *uploadsession.Store
 	reqlog  *reqlog.Store
 	meter   *httpmeter.Meter
+	pull    *pullTracker
 	opts    Options
 }
 
@@ -59,6 +60,7 @@ type putResponse struct {
 type dashboardStats struct {
 	Metadata metadata.Stats  `json:"metadata"`
 	Cache    *cache.Stats    `json:"cache,omitempty"`
+	Pull     pullStats       `json:"pull"`
 	Auth     auth.Stats      `json:"auth"`
 	Errors   reqlog.Stats    `json:"errors"`
 	HTTP     httpmeter.Stats `json:"http"`
@@ -153,6 +155,7 @@ func NewV2(store *blobstore.Store, objects objectstore.Store, meta *metadata.Sto
 		uploads: uploads,
 		reqlog:  reqlog.New(10000),
 		meter:   httpmeter.New(),
+		pull:    newPullTracker(),
 		opts:    opts,
 	}
 }
@@ -809,54 +812,59 @@ func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) 
 }
 
 func (h *Handler) openPayloadWithMetadata(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, error) {
+	reader, info, _, err := h.openDiskOrRemote(ctx, hash)
+	return reader, info, err
+}
+
+func (h *Handler) openDiskOrRemote(ctx context.Context, hash string) (io.ReadCloser, blobstore.Info, bool, error) {
 	record, err := h.payloadRecord(ctx, hash)
 	if err != nil {
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	exists, info, err := h.store.Exists(hash)
 	if err != nil {
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	if exists {
 		if info.Size != record.Size {
-			return nil, blobstore.Info{}, errors.New("metadata size does not match local payload")
+			return nil, blobstore.Info{}, false, errors.New("metadata size does not match local payload")
 		}
 		reader, info, err := h.store.Open(hash)
-		return reader, info, err
+		return reader, info, err == nil, err
 	}
 	if h.objects == nil {
-		return nil, blobstore.Info{}, os.ErrNotExist
+		return nil, blobstore.Info{}, false, os.ErrNotExist
 	}
 	remote, err := h.objects.Head(ctx, hash)
 	if err != nil {
 		if errors.Is(err, objectstore.ErrNotFound) {
-			return nil, blobstore.Info{}, os.ErrNotExist
+			return nil, blobstore.Info{}, false, os.ErrNotExist
 		}
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	if err := validateRemotePayload(record, remote); err != nil {
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	if err := h.recordPayloadETag(&record, remote); err != nil {
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	reader, opened, err := h.objects.Open(ctx, hash)
 	if err != nil {
 		if errors.Is(err, objectstore.ErrNotFound) {
-			return nil, blobstore.Info{}, os.ErrNotExist
+			return nil, blobstore.Info{}, false, os.ErrNotExist
 		}
-		return nil, blobstore.Info{}, err
+		return nil, blobstore.Info{}, false, err
 	}
 	if opened.ETag != remote.ETag {
 		_ = reader.Close()
-		return nil, blobstore.Info{}, objectstore.ErrIntegrityMismatch
+		return nil, blobstore.Info{}, false, objectstore.ErrIntegrityMismatch
 	}
 	return reader, blobstore.Info{
 		Hash:     remote.Hash,
 		ETag:     remote.ETag,
 		Checksum: remote.Checksum,
 		Size:     remote.Size,
-	}, nil
+	}, false, nil
 }
 
 func (h *Handler) markCached(hash string) {
@@ -884,6 +892,7 @@ func (h *Handler) collectDashboardStats() (dashboardStats, error) {
 		cacheStats := h.cache.Stats()
 		stats.Cache = &cacheStats
 	}
+	stats.Pull = h.pull.snapshot()
 	if h.auth != nil {
 		authStats, err := h.auth.Stats()
 		if err != nil {
