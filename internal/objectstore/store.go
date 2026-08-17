@@ -24,6 +24,7 @@ type Info struct {
 type ObjectStats struct {
 	TotalBytes  int64
 	ObjectCount int64
+	Pending     bool
 }
 
 // Store is the authoritative, synchronous payload store. A successful Put

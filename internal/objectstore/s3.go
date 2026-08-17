@@ -24,6 +24,7 @@ const (
 	metadataChecksum   = "vaps-checksum"
 	metadataLegacyHash = "vaps-blake3"
 	metadataSize       = "vaps-size"
+	statsCacheTTL      = 30 * time.Second
 )
 
 // S3Config configures an AWS S3 or S3-compatible object store.
@@ -42,9 +43,11 @@ type S3Store struct {
 	bucket string
 	prefix string
 
-	statsMu       sync.Mutex
-	statsCache    ObjectStats
-	statsCachedAt time.Time
+	statsMu         sync.Mutex
+	statsCache      ObjectStats
+	statsCachedAt   time.Time
+	statsErr        error
+	statsRefreshing bool
 }
 
 func NewS3(ctx context.Context, cfg S3Config) (*S3Store, error) {
@@ -219,13 +222,47 @@ func (s *S3Store) List(ctx context.Context) ([]Info, error) {
 	}
 }
 
-func (s *S3Store) Stats(ctx context.Context) (ObjectStats, error) {
+func (s *S3Store) Stats(_ context.Context) (ObjectStats, error) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	if !s.statsCachedAt.IsZero() && time.Since(s.statsCachedAt) < 30*time.Second {
+	if s.statsCachedAt.IsZero() || time.Since(s.statsCachedAt) >= statsCacheTTL {
+		s.startStatsRefreshLocked()
+	}
+	if !s.statsCachedAt.IsZero() {
 		return s.statsCache, nil
 	}
+	if s.statsRefreshing {
+		return ObjectStats{Pending: true}, nil
+	}
+	if s.statsErr != nil {
+		return ObjectStats{}, s.statsErr
+	}
+	return ObjectStats{Pending: true}, nil
+}
 
+func (s *S3Store) startStatsRefreshLocked() {
+	if s.statsRefreshing {
+		return
+	}
+	s.statsRefreshing = true
+	go s.refreshStats()
+}
+
+func (s *S3Store) refreshStats() {
+	stats, err := s.listStats(context.Background())
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.statsRefreshing = false
+	if err != nil {
+		s.statsErr = err
+		return
+	}
+	s.statsCache = stats
+	s.statsCachedAt = time.Now()
+	s.statsErr = nil
+}
+
+func (s *S3Store) listStats(ctx context.Context) (ObjectStats, error) {
 	var stats ObjectStats
 	var continuationToken *string
 	prefix := s.objectPrefix()
@@ -243,16 +280,13 @@ func (s *S3Store) Stats(ctx context.Context) (ObjectStats, error) {
 			stats.TotalBytes += aws.ToInt64(object.Size)
 		}
 		if !aws.ToBool(output.IsTruncated) {
-			break
+			return stats, nil
 		}
 		if output.NextContinuationToken == nil || aws.ToString(output.NextContinuationToken) == "" {
 			return ObjectStats{}, errors.New("list s3 objects returned no continuation token")
 		}
 		continuationToken = output.NextContinuationToken
 	}
-	s.statsCache = stats
-	s.statsCachedAt = time.Now()
-	return stats, nil
 }
 
 func (s *S3Store) key(hash string) string {

@@ -64,13 +64,14 @@ type dashboardInfoConfig struct {
 }
 
 type dashboardInfoCOS struct {
-	Endpoint    string `json:"endpoint"`
-	Region      string `json:"region"`
-	Bucket      string `json:"bucket"`
-	Prefix      string `json:"prefix"`
-	TotalBytes  int64  `json:"total_bytes"`
-	ObjectCount int64  `json:"object_count"`
-	StatsError  string `json:"stats_error,omitempty"`
+	Endpoint     string `json:"endpoint"`
+	Region       string `json:"region"`
+	Bucket       string `json:"bucket"`
+	Prefix       string `json:"prefix"`
+	TotalBytes   int64  `json:"total_bytes"`
+	ObjectCount  int64  `json:"object_count"`
+	StatsPending bool   `json:"stats_pending,omitempty"`
+	StatsError   string `json:"stats_error,omitempty"`
 }
 
 type dashboardInfoDisk struct {
@@ -122,6 +123,7 @@ func (h *Handler) collectDashboardInfo(ctx context.Context) dashboardInfoRespons
 		} else {
 			cos.TotalBytes = stats.TotalBytes
 			cos.ObjectCount = stats.ObjectCount
+			cos.StatsPending = stats.Pending
 		}
 	}
 

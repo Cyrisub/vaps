@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"vaps/internal/cache"
 	"vaps/internal/metadata"
+	"vaps/internal/objectstore"
 )
 
 func TestHTTPMeterExcludesDashboardPaths(t *testing.T) {
@@ -464,6 +466,37 @@ func TestDashboardInfoEndpoint(t *testing.T) {
 		info.Config.COS.ObjectCount != 1 {
 		t.Fatalf("COS config/stats incomplete: %#v", info.Config.COS)
 	}
+}
+
+func TestDashboardInfoJSONReturnsPendingCOSStats(t *testing.T) {
+	handler := newV2Handler(t, openMetadata(t), nil, pendingObjectStore{newMemoryObjectStore()})
+
+	infoResponse := httptest.NewRecorder()
+	handler.ServeHTTP(infoResponse, httptest.NewRequest(http.MethodGet, "/dashboard/info.json", nil))
+	if infoResponse.Code != http.StatusOK {
+		t.Fatalf("info json status = %d, want 200", infoResponse.Code)
+	}
+	var info struct {
+		Config struct {
+			COS struct {
+				StatsPending bool `json:"stats_pending"`
+			} `json:"cos"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(infoResponse.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode info: %v", err)
+	}
+	if !info.Config.COS.StatsPending {
+		t.Fatalf("expected stats_pending, body = %s", infoResponse.Body.Bytes())
+	}
+}
+
+type pendingObjectStore struct {
+	*memoryObjectStore
+}
+
+func (pendingObjectStore) Stats(context.Context) (objectstore.ObjectStats, error) {
+	return objectstore.ObjectStats{Pending: true}, nil
 }
 
 func TestDashboardHidesDisabledCache(t *testing.T) {
