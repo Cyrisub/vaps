@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"vaps/internal/auth"
@@ -92,6 +93,11 @@ type metadataStatusFlags struct {
 }
 
 var errLocalPayloadMissing = errors.New("metadata record exists but local payload is missing")
+
+// existsLookupConcurrency caps parallel metadata/COS lookups for a single
+// /v2/metadata/exists request. Misses often Head COS; serial Heads dominate
+// latency once the batch grows into the thousands.
+const existsLookupConcurrency = 32
 
 //go:embed dashboard.html
 var dashboardHTML string
@@ -717,30 +723,106 @@ func (h *Handler) exists(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	items, err := h.lookupExistsItems(r.Context(), uniqueHashes(request.Hashes))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	response := existsResponse{Items: make(map[string]existsItem, len(request.Hashes))}
 	for _, hash := range request.Hashes {
-		if _, seen := response.Items[hash]; seen {
-			continue
-		}
-		exists, info, err := h.store.Exists(hash)
-		if h.meta != nil {
-			exists, info, err = h.existsWithMetadata(hash)
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				writeStoreError(w, err)
-				return
-			}
-		}
-		if err != nil {
-			writeStoreError(w, err)
-			return
-		}
-		item := existsItem{Exists: exists}
-		if exists {
-			item.Size = info.Size
-		}
-		response.Items[hash] = item
+		response.Items[hash] = items[hash]
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func uniqueHashes(hashes []string) []string {
+	seen := make(map[string]struct{}, len(hashes))
+	out := make([]string, 0, len(hashes))
+	for _, hash := range hashes {
+		if _, ok := seen[hash]; ok {
+			continue
+		}
+		seen[hash] = struct{}{}
+		out = append(out, hash)
+	}
+	return out
+}
+
+func (h *Handler) lookupExistsItems(ctx context.Context, hashes []string) (map[string]existsItem, error) {
+	items := make(map[string]existsItem, len(hashes))
+	if len(hashes) == 0 {
+		return items, nil
+	}
+
+	// Without metadata there is no COS Head path; local blobstore stats are cheap.
+	if h.meta == nil {
+		for _, hash := range hashes {
+			exists, info, err := h.store.Exists(hash)
+			if err != nil {
+				return nil, err
+			}
+			item := existsItem{Exists: exists}
+			if exists {
+				item.Size = info.Size
+			}
+			items[hash] = item
+		}
+		return items, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type outcome struct {
+		item existsItem
+		err  error
+	}
+	outcomes := make([]outcome, len(hashes))
+	sem := make(chan struct{}, existsLookupConcurrency)
+	var wg sync.WaitGroup
+	for i, hash := range hashes {
+		wg.Add(1)
+		go func(i int, hash string) {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				outcomes[i].err = ctx.Err()
+				return
+			case sem <- struct{}{}:
+			}
+			defer func() { <-sem }()
+
+			exists, info, err := h.existsWithMetadata(ctx, hash)
+			if err != nil {
+				outcomes[i].err = err
+				cancel()
+				return
+			}
+			item := existsItem{Exists: exists}
+			if exists {
+				item.Size = info.Size
+			}
+			outcomes[i].item = item
+		}(i, hash)
+	}
+	wg.Wait()
+
+	var firstErr error
+	for _, outcome := range outcomes {
+		if outcome.err == nil {
+			continue
+		}
+		if firstErr == nil || errors.Is(firstErr, context.Canceled) {
+			firstErr = outcome.err
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	for i, hash := range hashes {
+		items[hash] = outcomes[i].item
+	}
+	return items, nil
 }
 
 func queryHash(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -789,8 +871,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
-func (h *Handler) existsWithMetadata(hash string) (bool, blobstore.Info, error) {
-	record, err := h.payloadRecord(context.Background(), hash)
+func (h *Handler) existsWithMetadata(ctx context.Context, hash string) (bool, blobstore.Info, error) {
+	record, err := h.payloadRecord(ctx, hash)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, blobstore.Info{}, nil
 	}

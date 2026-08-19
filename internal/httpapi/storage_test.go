@@ -3,16 +3,88 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"vaps/internal/metadata"
 	"vaps/internal/objectstore"
 )
+
+func TestV2MetadataExistsHeadsCOSConcurrently(t *testing.T) {
+	const (
+		count     = 32
+		headDelay = 80 * time.Millisecond
+	)
+	objects := newMemoryObjectStore()
+	objects.headDelay = headDelay
+
+	hashes := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		payload := []byte("exists-concurrent-" + strconv.Itoa(i))
+		hash := ioHash(payload)
+		sum := checksum(payload)
+		objects.objects[hash] = memoryObject{
+			info: objectstore.Info{Hash: hash, Checksum: sum, Size: int64(len(payload)), ETag: "etag"},
+			data: payload,
+		}
+		hashes = append(hashes, hash)
+	}
+
+	handler := newV2Handler(t, openMetadata(t), nil, objects)
+	token := requestToken(t, handler)
+
+	body, err := json.Marshal(map[string][]string{"hashes": hashes})
+	if err != nil {
+		t.Fatalf("marshal exists body: %v", err)
+	}
+	started := time.Now()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v2/metadata/exists", bytes.NewReader(body))
+	request.Header.Set("Authorization", authHeader(token))
+	handler.ServeHTTP(response, request)
+	elapsed := time.Since(started)
+	if response.Code != http.StatusOK {
+		t.Fatalf("exists status = %d, want %d; body=%q", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	// Serial Heads would take count*headDelay (~2.5s). Concurrent capped at
+	// existsLookupConcurrency should finish near one Head RTT.
+	if elapsed >= time.Duration(count)*headDelay/2 {
+		t.Fatalf("exists elapsed %s; want concurrent COS Heads (<< %s)", elapsed, time.Duration(count)*headDelay)
+	}
+	if elapsed < headDelay {
+		t.Fatalf("exists elapsed %s; want at least one headDelay=%s", elapsed, headDelay)
+	}
+
+	var decoded struct {
+		Items map[string]struct {
+			Exists bool  `json:"exists"`
+			Size   int64 `json:"size"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode exists response: %v", err)
+	}
+	if len(decoded.Items) != count {
+		t.Fatalf("items = %d, want %d", len(decoded.Items), count)
+	}
+	for _, hash := range hashes {
+		item, ok := decoded.Items[hash]
+		if !ok || !item.Exists || item.Size <= 0 {
+			t.Fatalf("item[%s] = %#v", hash, item)
+		}
+	}
+	if objects.headCalls != count {
+		t.Fatalf("headCalls = %d, want %d", objects.headCalls, count)
+	}
+}
 
 func TestDirectPushCommitsAuthoritativeStoreBeforeSuccess(t *testing.T) {
 	meta := openMetadata(t)
@@ -124,6 +196,7 @@ type memoryObjectStore struct {
 	putErr    error
 	headCalls int
 	openCalls int
+	headDelay time.Duration
 }
 
 type memoryObject struct {
@@ -135,7 +208,16 @@ func newMemoryObjectStore() *memoryObjectStore {
 	return &memoryObjectStore{objects: map[string]memoryObject{}}
 }
 
-func (s *memoryObjectStore) Head(_ context.Context, hash string) (objectstore.Info, error) {
+func (s *memoryObjectStore) Head(ctx context.Context, hash string) (objectstore.Info, error) {
+	if s.headDelay > 0 {
+		timer := time.NewTimer(s.headDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return objectstore.Info{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.headCalls++
