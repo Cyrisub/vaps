@@ -137,7 +137,7 @@ Republishing the same tag replaces release metadata and assets for pre-releases 
 
 - Title: the tag itself, for example `v0.0.1`.
 - Formal releases: include a `## Summary` section with commits since the previous tag.
-- All releases: include a `## Artifacts` section listing SHA256 checksums for every uploaded archive so republished builds with the same tag can be compared.
+- All releases: include a `## Artifacts` section listing SHA256 checksums for every uploaded archive and the standalone `install.sh` asset so republished builds with the same tag can be compared. Hash the complete uploaded files and use their exact filenames, including archive extensions.
 - Do not add separate release metadata blocks such as tag, commit, or release kind.
 
 ### Artifacts

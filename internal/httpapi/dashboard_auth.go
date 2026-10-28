@@ -26,12 +26,10 @@ type authQueryItem struct {
 	Status         string            `json:"status"`
 	CreatedAt      time.Time         `json:"created_at"`
 	CreatedAtHuman string            `json:"created_at_human"`
-	ExpiresAt      time.Time         `json:"expires_at"`
-	ExpiresAtHuman string            `json:"expires_at_human"`
-	ParkedAt       *time.Time        `json:"parked_at,omitempty"`
-	ParkedAtHuman  string            `json:"parked_at_human,omitempty"`
-	RevokedAt      *time.Time        `json:"revoked_at,omitempty"`
-	RevokedAtHuman string            `json:"revoked_at_human,omitempty"`
+	LastSeenAt     *time.Time        `json:"last_seen_at"`
+	RequestCount   uint64            `json:"request_count"`
+	LastRemoteIP   string            `json:"last_remote_ip"`
+	LastUserAgent  string            `json:"last_user_agent"`
 	ErrorCount     int64             `json:"error_count"`
 }
 
@@ -53,16 +51,8 @@ type authClearResponse struct {
 }
 
 func (h *Handler) authClearExpired(w http.ResponseWriter) {
-	if h.auth == nil {
-		http.Error(w, "auth is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	deleted, err := h.auth.DeleteExpired()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, authClearResponse{Deleted: deleted})
+	// Compatibility endpoint: no source registration is expired or purged.
+	writeJSON(w, http.StatusOK, authClearResponse{Deleted: 0})
 }
 
 func (h *Handler) authClearAll(w http.ResponseWriter) {
@@ -97,11 +87,10 @@ func (h *Handler) authQuery(w http.ResponseWriter, r *http.Request) {
 	if h.reqlog != nil {
 		errorCounts = h.reqlog.CountByTokenHash()
 	}
-	now := time.Now().UTC()
 	items := make([]authQueryItem, 0, len(tokens))
 	for _, token := range tokens {
-		status := auth.TokenStatus(token, now)
-		if query.Status != "" && status != query.Status {
+		status := "tracked"
+		if query.Status != "" && query.Status != "active" && status != query.Status {
 			continue
 		}
 		if query.ClientID != "" && !strings.Contains(strings.ToLower(token.ClientID), strings.ToLower(query.ClientID)) {
@@ -144,10 +133,10 @@ func parseAuthQuery(r *http.Request) (authQuery, error) {
 	query := authQuery{Limit: 100}
 	if value := strings.TrimSpace(r.URL.Query().Get("status")); value != "" {
 		switch value {
-		case "active", "parked", "expired", "revoked":
+		case "tracked", "active", "parked", "expired", "revoked":
 			query.Status = value
 		default:
-			return authQuery{}, errors.New("status must be active, parked, expired, or revoked")
+			return authQuery{}, errors.New("status must be tracked, active, parked, expired, or revoked")
 		}
 	}
 	query.ClientID = strings.TrimSpace(r.URL.Query().Get("client_id"))
@@ -187,17 +176,11 @@ func newAuthQueryItem(token auth.Token, status string, errorCount int64) authQue
 		Status:         status,
 		CreatedAt:      token.CreatedAt,
 		CreatedAtHuman: formatDashboardTime(token.CreatedAt),
-		ExpiresAt:      token.ExpiresAt,
-		ExpiresAtHuman: formatDashboardTime(token.ExpiresAt),
+		LastSeenAt:     token.Activity.LastSeenAt,
+		RequestCount:   token.Activity.RequestCount,
+		LastRemoteIP:   NormalizeClientIP(token.Activity.RemoteIP),
+		LastUserAgent:  token.Activity.UserAgent,
 		ErrorCount:     errorCount,
-	}
-	if token.ParkedAt != nil {
-		item.ParkedAt = token.ParkedAt
-		item.ParkedAtHuman = formatDashboardTime(*token.ParkedAt)
-	}
-	if token.RevokedAt != nil {
-		item.RevokedAt = token.RevokedAt
-		item.RevokedAtHuman = formatDashboardTime(*token.RevokedAt)
 	}
 	if item.ClientInfo == nil {
 		item.ClientInfo = map[string]string{}

@@ -151,6 +151,50 @@ func TestDirectPushRejectsExistingHashWithDifferentDigest(t *testing.T) {
 	}
 }
 
+func TestConcurrentAnonymousPushesCannotOverwriteSameIdentity(t *testing.T) {
+	objects := &delayedMissingObjectStore{newMemoryObjectStore()}
+	hash := ioHash([]byte("shared-identity"))
+	handler := newV2Handler(t, openMetadata(t), nil, objects)
+	const count = 8
+	responses := make([]*httptest.ResponseRecorder, count)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Go(func() {
+			<-start
+			payload := []byte("different-payload-" + strconv.Itoa(i))
+			responses[i] = httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v2/payload/push?iohash="+hash+"&checksum="+checksum(payload), bytes.NewReader(payload))
+			handler.ServeHTTP(responses[i], req)
+		})
+	}
+	close(start)
+	wg.Wait()
+	created := 0
+	for _, response := range responses {
+		switch response.Code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("concurrent push = %d: %s", response.Code, response.Body.String())
+		}
+	}
+	if created != 1 {
+		t.Fatalf("created = %d, want exactly one authoritative write", created)
+	}
+}
+
+type delayedMissingObjectStore struct{ *memoryObjectStore }
+
+func (s *delayedMissingObjectStore) Head(ctx context.Context, hash string) (objectstore.Info, error) {
+	info, err := s.memoryObjectStore.Head(ctx, hash)
+	if errors.Is(err, objectstore.ErrNotFound) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return info, err
+}
+
 func TestPullValidatesRemoteChecksumBeforeOpen(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 	meta := openMetadata(t)

@@ -181,13 +181,15 @@ jobs:
             if [ "$goos" = "windows" ]; then
               cp scripts/pkg/windows/start.ps1 scripts/pkg/windows/update.ps1 "$staging/"
               (cd "$staging" && zip -q "../../pkg/${name}.zip" ./*)
+              archive="dist/pkg/${name}.zip"
             else
               cp scripts/pkg/unix/start.sh scripts/pkg/unix/update.sh "$staging/"
               chmod +x "$staging/${binary_name}" "$staging/start.sh" "$staging/update.sh"
               tar -czf "dist/pkg/${name}.tar.gz" -C "$staging" .
+              archive="dist/pkg/${name}.tar.gz"
             fi
 
-            sha256sum "$staging/${binary_name}" | awk -v artifact="$name" '{print $1 "  " artifact}' >> dist/pkg/checksums.txt
+            sha256sum "$archive" | awk -v artifact="${archive##*/}" '{print $1 "  " artifact}' >> dist/pkg/checksums.txt
             rm -rf "$staging"
           done
 
@@ -195,6 +197,7 @@ jobs:
               -e "s|__CHANNEL__|${CHANNEL}|g" \
               scripts/pkg/unix/install.sh > dist/pkg/install.sh
           chmod +x dist/pkg/install.sh
+          sha256sum dist/pkg/install.sh | awk '{print $1 "  install.sh"}' >> dist/pkg/checksums.txt
 
           sort -k2 dist/pkg/checksums.txt -o dist/pkg/checksums.txt
 

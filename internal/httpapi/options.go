@@ -3,7 +3,7 @@ package httpapi
 import "time"
 
 type Options struct {
-	AuthExpireTime        time.Duration
+	AuthExpireTime        time.Duration // Deprecated; source tokens never expire.
 	UploadDirectMaxBytes  int64
 	UploadExpiration      time.Duration
 	UploadCleanupInterval time.Duration
@@ -30,7 +30,6 @@ type Options struct {
 
 func defaultOptions() Options {
 	return Options{
-		AuthExpireTime:        30 * time.Minute,
 		UploadDirectMaxBytes:  8 * 1024 * 1024,
 		UploadExpiration:      24 * time.Hour,
 		UploadCleanupInterval: time.Minute,

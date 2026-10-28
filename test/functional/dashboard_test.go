@@ -28,7 +28,7 @@ func TestFunctionalDashboardPages(t *testing.T) {
 
 	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard", "Overview")
 	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/metadata", "Payloads")
-	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/auth", "Auth Browser")
+	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/auth", "Request Sources")
 	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/errors", "Error Log")
 	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/telemetry", "Telemetry")
 	requireDashboardPage(t, srv.Client, srv.URL, "/dashboard/info", "Server Info")

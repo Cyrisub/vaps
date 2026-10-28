@@ -35,29 +35,29 @@ func TestFunctionalNegativeAuthRequest(t *testing.T) {
 	readBody(t, missingClient)
 }
 
-func TestFunctionalNegativeAuthExpire(t *testing.T) {
+func TestFunctionalLegacyAuthExpireAcceptsOptionalToken(t *testing.T) {
 	srv := startServer(t)
 
 	missingAuth, err := srv.Client.Get(url(srv.URL, "/v2/auth/expire"))
 	if err != nil {
 		t.Fatalf("GET expire without auth: %v", err)
 	}
-	requireStatus(t, missingAuth, http.StatusUnauthorized)
+	requireStatus(t, missingAuth, http.StatusOK)
 	readBody(t, missingAuth)
 
 	unknownToken := authRequest(t, srv.Client, http.MethodGet, url(srv.URL, "/v2/auth/expire"), "not-a-real-token", nil)
-	requireStatus(t, unknownToken, http.StatusUnauthorized)
+	requireStatus(t, unknownToken, http.StatusOK)
 	readBody(t, unknownToken)
 }
 
-func TestFunctionalNegativeAuthPark(t *testing.T) {
+func TestFunctionalLegacyAuthParkAcceptsOptionalToken(t *testing.T) {
 	srv := startServer(t)
 
 	missingAuth, err := srv.Client.Get(url(srv.URL, "/v2/auth/park"))
 	if err != nil {
 		t.Fatalf("GET park without auth: %v", err)
 	}
-	requireStatus(t, missingAuth, http.StatusUnauthorized)
+	requireStatus(t, missingAuth, http.StatusOK)
 	readBody(t, missingAuth)
 }
 
@@ -70,7 +70,7 @@ func TestFunctionalNegativePullAuthAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET without auth: %v", err)
 	}
-	requireStatus(t, noAuth, http.StatusUnauthorized)
+	requireStatus(t, noAuth, http.StatusNotFound)
 	readBody(t, noAuth)
 
 	badHash := authRequest(t, srv.Client, http.MethodGet, url(srv.URL, "/v2/payload/pull?iohash=bad"), token, nil)
@@ -132,7 +132,7 @@ func TestFunctionalNegativePushAuthAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST without auth: %v", err)
 	}
-	requireStatus(t, noAuth, http.StatusUnauthorized)
+	requireStatus(t, noAuth, http.StatusBadRequest)
 	readBody(t, noAuth)
 
 	missingChecksum := authRequest(t, srv.Client, http.MethodPost, urlf(srv.URL, "/v2/payload/push?iohash=%s", hash), token, bytes.NewReader([]byte("x")))
@@ -164,7 +164,7 @@ func TestFunctionalNegativeMetadata(t *testing.T) {
 	existsNoAuth := jsonRequest(t, srv.Client, http.MethodPost, url(srv.URL, "/v2/metadata/exists"), "", map[string][]string{
 		"hashes": {ioHash([]byte("x"))},
 	})
-	requireStatus(t, existsNoAuth, http.StatusUnauthorized)
+	requireStatus(t, existsNoAuth, http.StatusOK)
 	readBody(t, existsNoAuth)
 
 	existsEmpty := jsonRequest(t, srv.Client, http.MethodPost, url(srv.URL, "/v2/metadata/exists"), token, map[string][]string{

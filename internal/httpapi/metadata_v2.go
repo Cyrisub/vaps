@@ -35,9 +35,6 @@ func (h *Handler) metadataV2(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) metadataExistsV2(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireAuth(w, r); !ok {
-		return
-	}
 	h.exists(w, r)
 }
 

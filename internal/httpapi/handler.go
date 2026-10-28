@@ -36,6 +36,9 @@ type Handler struct {
 	meter   *httpmeter.Meter
 	pull    *pullTracker
 	opts    Options
+
+	// Serialize commits for the same payload independently of source tracking.
+	payloadWrites [256]sync.Mutex
 }
 
 type existsRequest struct {
@@ -134,9 +137,6 @@ func NewWithMetadataAndCache(store *blobstore.Store, meta *metadata.Store, lru *
 }
 
 func NewV2(store *blobstore.Store, objects objectstore.Store, meta *metadata.Store, lru *cache.Cache, authStore *auth.Store, uploads *uploadsession.Store, opts Options) *Handler {
-	if opts.AuthExpireTime <= 0 {
-		opts.AuthExpireTime = defaultOptions().AuthExpireTime
-	}
 	if opts.UploadDirectMaxBytes <= 0 {
 		opts.UploadDirectMaxBytes = defaultOptions().UploadDirectMaxBytes
 	}
@@ -240,8 +240,9 @@ func AccessLog(next http.Handler) http.Handler {
 		if level == "verbose" {
 			return
 		}
+		source := sourceFromRequest(r)
 		log.Printf(
-			"access method=%s path=%q status=%d bytes=%d duration=%s remote_addr=%q user_agent=%q level=%s",
+			"access method=%s path=%q status=%d bytes=%d duration=%s remote_addr=%q user_agent=%q level=%s client_id=%q token_hash=%q",
 			r.Method,
 			r.URL.RequestURI(),
 			recorder.status,
@@ -250,6 +251,8 @@ func AccessLog(next http.Handler) http.Handler {
 			r.RemoteAddr,
 			r.UserAgent(),
 			level,
+			source.ClientID,
+			source.TokenHash,
 		)
 	})
 }

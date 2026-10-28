@@ -87,13 +87,17 @@ func requestToken(t *testing.T, client *http.Client, baseURL string) string {
 	requireStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
 	var got struct {
-		Token string `json:"token"`
+		Token     string          `json:"token"`
+		ExpiresAt json.RawMessage `json:"expires_at"`
 	}
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("decode auth response: %v", err)
 	}
 	if got.Token == "" {
 		t.Fatalf("token is empty")
+	}
+	if string(got.ExpiresAt) != "null" {
+		t.Fatalf("source token should have no expiry: %s", got.ExpiresAt)
 	}
 	return got.Token
 }

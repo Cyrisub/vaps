@@ -44,6 +44,7 @@ type MetadataConfig struct {
 }
 
 type AuthConfig struct {
+	// Deprecated: accepted for old config files; source tokens never expire.
 	ExpireTime Duration `toml:"expire_time" hidden:"" name:"expire-time"`
 }
 
@@ -203,9 +204,6 @@ func normalize(cfg *Config) {
 }
 
 func validate(cfg Config) error {
-	if time.Duration(cfg.Auth.ExpireTime) <= 0 {
-		return errors.New("auth-expire-time must be positive")
-	}
 	if cfg.Cache.Bytes < 0 {
 		return errors.New("cache-bytes must not be negative")
 	}

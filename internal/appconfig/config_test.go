@@ -230,6 +230,18 @@ func TestDurationRemainsUsable(t *testing.T) {
 	}
 }
 
+func TestLegacyAuthExpirySettingsAreAccepted(t *testing.T) {
+	for _, value := range []string{"0s", "30m", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeConfig(t, dir, "[auth]\nexpire_time = "+strconv.Quote(value)+"\n[storage.s3]\nendpoint = \"http://localhost:9000\"\n")
+			if _, err := appconfig.FromArgsWithBaseDir([]string{"--config", path}, dir); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func writeConfig(t *testing.T, dir, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, "config.toml")

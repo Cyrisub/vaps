@@ -83,9 +83,9 @@
         <p class="hint"><span id="pull-hits">0</span> hits / <span id="pull-misses">0</span> misses</p>
       </a>
       <a class="stats-tile clickable detailed" href="/dashboard/auth">
-        <p class="label">Auth Tokens</p>
-        <p class="value" id="auth-active">0</p>
-        <p class="hint"><span id="auth-total">0</span> total / <span id="auth-parked">0</span> parked / <span id="auth-revoked">0</span> revoked</p>
+        <p class="label">Request Sources</p>
+        <p class="value" id="auth-total">0</p>
+        <p class="hint">registered clients · optional tracing</p>
       </a>
       <a class="stats-tile clickable detailed" href="/dashboard/errors">
         <p class="label">Request</p>
@@ -200,11 +200,8 @@
           disk: { hits: pullDisk.hits || 0, misses: pullDisk.misses || 0 }
         },
         auth: {
-          active: authStats.active_count || 0,
-          parked: authStats.parked_count || 0,
-          total: authStats.total_count || 0,
-          expired: authStats.expired_count || 0,
-          revoked: authStats.revoked_count || 0
+          tracked: authStats.tracked_count || 0,
+          total: authStats.total_count || 0
         },
         request: {
           error: requestError,
@@ -226,10 +223,7 @@
       text("hit-rate", pullHitRate.toFixed(1));
       text("pull-hits", pull.hits || 0);
       text("pull-misses", pull.misses || 0);
-      text("auth-active", authStats.active_count || 0);
       text("auth-total", authStats.total_count || 0);
-      text("auth-parked", authStats.parked_count || 0);
-      text("auth-revoked", authStats.revoked_count || 0);
       setCount("request-error", requestError, "is-active");
       setCount("request-warn", requestWarn, "is-active");
       for (const id of ["cache-summary-usage", "cache-details"]) {

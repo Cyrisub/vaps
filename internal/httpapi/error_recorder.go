@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"vaps/internal/auth"
 	"vaps/internal/reqlog"
 )
 
@@ -56,17 +55,7 @@ func (h *Handler) recordRequestError(r *http.Request, status int, message string
 	if h.reqlog == nil {
 		return
 	}
-	token := bearerToken(r)
-	tokenHash := ""
-	clientID := ""
-	if token != "" {
-		tokenHash = auth.HashToken(token)
-		if h.auth != nil {
-			if record, err := h.auth.LookupByHash(tokenHash); err == nil {
-				clientID = record.ClientID
-			}
-		}
-	}
+	source := sourceFromRequest(r)
 	h.reqlog.Record(reqlog.Record{
 		At:        time.Now().UTC(),
 		Method:    r.Method,
@@ -75,8 +64,8 @@ func (h *Handler) recordRequestError(r *http.Request, status int, message string
 		Message:   strings.TrimSpace(message),
 		RemoteIP:  clientIP(r),
 		UserAgent: r.UserAgent(),
-		TokenHash: tokenHash,
-		ClientID:  clientID,
+		TokenHash: source.TokenHash,
+		ClientID:  source.ClientID,
 	})
 }
 
@@ -88,5 +77,5 @@ func requestPath(r *http.Request) string {
 }
 
 func (h *Handler) HTTPHandler() http.Handler {
-	return AccessLog(httpMeter(h, errorRecorder(h, h)))
+	return requestSources(h, AccessLog(httpMeter(h, errorRecorder(h, h))))
 }

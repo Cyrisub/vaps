@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,39 +12,13 @@ import (
 	"strings"
 )
 
-type authContextKey struct{}
-
 func bearerToken(r *http.Request) string {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
-	if !strings.HasPrefix(header, "Bearer ") {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-}
-
-func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if h.auth == nil {
-		http.Error(w, "auth is not configured", http.StatusServiceUnavailable)
-		return "", false
-	}
-	token := bearerToken(r)
-	if token == "" {
-		http.Error(w, "missing bearer token", http.StatusUnauthorized)
-		return "", false
-	}
-	if _, err := h.auth.Validate(token); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return "", false
-	}
-	if _, err := h.auth.Refresh(token); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return "", false
-	}
-	return token, true
-}
-
-func withAuthToken(ctx context.Context, token string) context.Context {
-	return context.WithValue(ctx, authContextKey{}, token)
+	return parts[1]
 }
 
 func parseUploadChecksum(header string) (string, []byte, error) {

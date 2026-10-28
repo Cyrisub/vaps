@@ -22,7 +22,8 @@ bytes = "0"
 max_object_bytes = "4MiB"
 
 [auth]
-expire_time = "30m"
+# Deprecated compatibility setting; source tokens never expire.
+expire_time = "0s"
 
 [upload]
 direct_max_bytes = "8MiB"

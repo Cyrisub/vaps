@@ -24,7 +24,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and macOS, and `.zip` on Windows. Each package includes the binary (`vaps` or `vaps.exe`), default `config.toml`, and `start`/`update` helper scripts. SHA256 checksums in the release notes are for the target binary, not the archive. Run `vaps --version` to inspect the embedded version and release channel.
+Pre-release tags such as `v1.0.0-beta.1` are also supported. Release artifacts are named `vaps-<version>-<os>-<arch>.tar.gz` on Linux and macOS, and `.zip` on Windows. Each package includes the binary (`vaps` or `vaps.exe`), default `config.toml`, and `start`/`update` helper scripts. SHA256 checksums in the release notes cover the complete uploaded archives and the standalone `install.sh` asset. Run `vaps --version` to inspect the embedded version and release channel.
 
 GitHub also attaches automatic "Source code (zip/tar.gz)" downloads to every release. That behavior is controlled by GitHub and cannot be disabled from the workflow.
 
@@ -36,7 +36,7 @@ Release type is chosen from the branch that contains the tagged commit:
 | `dev` | Pre-release |
 | Any other branch | Draft |
 
-The release title is the tag (for example `v0.0.1`). Formal releases include a commit summary since the previous tag; every release lists SHA256 checksums for its target binaries so republished builds with the same tag can be compared. Pre-releases and drafts may replace an existing release with the same tag; formal releases reject duplicate tags.
+The release title is the tag (for example `v0.0.1`). Formal releases include a commit summary since the previous tag; every release lists SHA256 checksums for its uploaded archives and `install.sh` so republished builds with the same tag can be compared. Pre-releases and drafts may replace an existing release with the same tag; formal releases reject duplicate tags.
 
 ## Installation
 
@@ -171,32 +171,37 @@ S3 is the authoritative payload store. Each upload is verified against the clien
 
 ## HTTP API
 
-Payload, authentication, and VCS metadata APIs are exposed under `/v2`.
+Payload, source registration, and VCS metadata APIs are exposed under `/v2`.
 Health and dashboard endpoints are outside that namespace.
 
 ### Common conventions
 
 - API paths are rooted at `/v2`.
-- Requests that require authentication use `Authorization: Bearer <token>`.
+- Requests may optionally send `Authorization: Bearer <token>` to associate them with a registered client. Tokens do not authorize access.
 - JSON requests should send `Content-Type: application/json`; JSON responses use `Content-Type: application/json`.
 - Timestamps are RFC3339 strings in UTC.
-- Unless noted otherwise, invalid parameters or request bodies return `400 Bad Request`; missing or invalid credentials return `401 Unauthorized`; missing payloads return `404 Not Found`.
+- Unless noted otherwise, invalid parameters or request bodies return `400 Bad Request`; missing payloads return `404 Not Found`. Missing, malformed, unknown, and legacy expired tokens do not block requests.
 
 Payload objects are identified with the `iohash` query parameter. An `iohash` is the lowercase hex UE `FIoHash` of the uncompressed payload: BLAKE3-256 truncated to the leading 20 bytes and encoded as 40 hex characters.
 
 The `checksum` query parameter identifies the transmitted file, such as a compressed file. It is the lowercase 8-character hexadecimal CRC32C (Castagnoli) checksum of the exact request bytes. It is independent from the UE `iohash`; clients must calculate it from the compressed bytes before starting an upload.
 
-### Auth
+### Request source tracking (legacy auth endpoints)
+
+Source registration is optional. The server does not authenticate requests,
+expire or renew tokens, park clients, or revoke their access. A registered
+bearer token associates requests with `client_id`, registration IP,
+`client_info`, and User-Agent. These are diagnostic labels supplied by clients,
+not verified identities. Requests with no recognizable registration still run
+normally; their IP and User-Agent remain available in warning/error logs.
 
 - `POST /v2/auth/request`
 
-  Request a bearer token. No authentication is required. Tokens are reused for
-  the same `client_id` and client IP:
-
-  1. If an **active** token exists, reuse it and refresh its idle expiry.
-  2. Else if a **parked** token exists, wake it (clear parked state, set a new
-     idle expiry) and return the same token value.
-  3. Otherwise issue a new token.
+  Register a source or reuse the newest stored token for the same `client_id`
+  and normalized client IP. Legacy expired, parked, and revoked records are
+  also reusable. Existing records containing only a token hash can still label
+  requests using that token; registration issues a new token if no reusable
+  plaintext token is stored.
 
   Request body:
 
@@ -207,45 +212,41 @@ The `checksum` query parameter identifies the transmitted file, such as a compre
   Successful response (`200 OK`):
 
   ```json
-  {"token":"<token>","expires_at":"2026-07-04T15:16:00Z"}
+  {"token":"<token>","expires_at":null}
   ```
 
-  `client_id` is required. `client_info` is optional and is a string map for
-  client diagnostics. `expires_at` uses a sliding idle window configured by
-  `auth.expire_time`. Every successful authenticated request refreshes the
-  token expiry.
+  `client_id` is required; `client_info` is an optional string map. The
+  `expires_at` field is retained with a null value to indicate no expiry.
+  Clients that require an expiry timestamp must adapt to this response.
+  The old `[auth] expire_time` configuration and `--auth-expire-time` flag
+  are accepted for compatibility and ignored.
 
 - `GET /v2/auth/park`
 
-  Park the caller's active token. Requires `Authorization: Bearer <token>`.
-  The token cannot authenticate again until a matching `/v2/auth/request` wakes
-  it, and it does not idle-expire while parked.
-
-  Successful response (`200 OK`):
-
-  ```json
-  {"parked":true}
-  ```
+  Compatibility no-op. Returns `200 OK` with `{"parked":false}` and does not
+  change source registrations. No token is required.
 
 - `GET /v2/auth/expire`
 
-  Immediately revoke the caller's token. Requires
-  `Authorization: Bearer <token>`. Revoked tokens are never reused.
+  Compatibility no-op. Returns `200 OK` with `{"expired":false}` and does not
+  change source registrations. No token is required.
 
-  Successful response (`200 OK`):
+The Request Sources dashboard at `/dashboard/auth` shows registered clients,
+request counts, last seen time, last request IP/User-Agent, and recent error
+counts. All requests carrying a known token update activity, except dashboard
+polling. Activity counters live in memory and reset on server restart; source
+registrations persist in `auth.db`. Source observation only reads the database;
+it does not write a renewal or activity record for every request. Registration
+and manual cleanup still write the database.
 
-  ```json
-  {"expired":true}
-  ```
-
-Dashboard auth cleanup (also available from the HTML Auth Browser):
-
-- `POST /dashboard/auth/clear-expired` deletes expired tokens from the auth database.
-- `POST /dashboard/auth/clear-all` deletes every stored auth token.
+- `POST /dashboard/auth/clear-expired` is a compatibility no-op returning
+  `{"deleted":0}`. Legacy records are retained for tracing.
+- `POST /dashboard/auth/clear-all` deletes all source registrations. Requests
+  continue normally, but clients must register again to restore source labels.
 
 ### Payload pull
 
-Requires `Authorization: Bearer <token>`.
+Optional source tracking uses `Authorization: Bearer <token>`; it is not required.
 
 - `HEAD /v2/payload/pull?iohash=<iohash>`
 
@@ -271,7 +272,7 @@ Requires `Authorization: Bearer <token>`.
 
 ### Payload push
 
-Requires `Authorization: Bearer <token>`.
+Optional source tracking uses `Authorization: Bearer <token>`; it is not required.
 
 The same endpoint supports direct upload for small files and tus uploads for
 large or resumable files. Every push request must provide both `iohash` and
@@ -374,7 +375,7 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 
 - `POST /v2/metadata/exists`
 
-  Check multiple payload identities. Requires bearer authentication.
+  Check multiple payload identities. An optional bearer token labels the request source.
 
   Request body:
 
@@ -513,18 +514,18 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 
 - `GET /dashboard/auth`
 
-  Returns the authentication browser HTML page. Its JSON query endpoint is:
+  Returns the Request Sources HTML page. Its JSON query endpoint is:
 
-  - `GET /dashboard/auth/query?status=active|parked|expired|revoked&client_id=<text>&hash=<prefix>&limit=<n>&offset=<n>`
+  - `GET /dashboard/auth/query?status=tracked&client_id=<text>&hash=<prefix>&limit=<n>&offset=<n>`
 
 - `POST /dashboard/auth/clear-expired`
 
-  Deletes expired authentication records and returns `{"deleted":<count>}`.
+  Compatibility no-op; returns `{"deleted":0}`. Source records never expire.
 
 - `POST /dashboard/auth/clear-all`
 
-  Deletes all authentication records and returns `{"deleted":<count>}`. All
-  clients must request new tokens afterward.
+  Deletes all source registrations and returns `{"deleted":<count>}`. Requests
+  remain accessible; clients can register again to restore source labels.
 
 - `GET /dashboard/errors`
 
@@ -546,7 +547,7 @@ Supported tus extensions: `creation`, `creation-with-upload`, `concatenation`, `
 
 ### Recommended client flow
 
-1. Call `/v2/auth/request` and retain the returned bearer token.
+1. Optionally call `/v2/auth/request` and retain the returned bearer token for source tracking; it never expires.
 2. Calculate `iohash` from the uncompressed UE payload and CRC32C
    `checksum` from the compressed bytes that will be transmitted.
 3. Use direct `POST` when the file is within `Upload-Direct-Max-Bytes`;

@@ -96,7 +96,7 @@ func TestDashboardAuthAndErrorsPages(t *testing.T) {
 	if authPage.Code != http.StatusOK {
 		t.Fatalf("auth page status = %d, want 200", authPage.Code)
 	}
-	if !bytes.Contains(authPage.Body.Bytes(), []byte("Auth Browser")) {
+	if !bytes.Contains(authPage.Body.Bytes(), []byte("Request Sources")) {
 		t.Fatalf("auth page missing title")
 	}
 
@@ -201,7 +201,7 @@ func TestDashboardSharedShellAssets(t *testing.T) {
 		`label: "Overview"`,
 		`label: "Errors"`,
 		`label: "Payloads"`,
-		`label: "Auth"`,
+		`label: "Sources"`,
 		`label: "Telemetry"`,
 		`label: "Info"`,
 	}

@@ -136,7 +136,7 @@ func (h *Handler) collectDashboardInfo(ctx context.Context) dashboardInfoRespons
 	}
 
 	config := dashboardInfoConfig{
-		AuthExpireTime:        h.opts.AuthExpireTime.String(),
+		AuthExpireTime:        "disabled (source tracking only)",
 		UploadDirectMaxBytes:  h.opts.UploadDirectMaxBytes,
 		UploadExpiration:      h.opts.UploadExpiration.String(),
 		UploadCleanupInterval: h.opts.UploadCleanupInterval.String(),

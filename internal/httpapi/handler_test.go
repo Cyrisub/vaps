@@ -107,76 +107,37 @@ func TestDashboardMetadataReturnsHTML(t *testing.T) {
 	}
 }
 
-func TestV2AuthRequestAndExpire(t *testing.T) {
-	handler := newV2Handler(t, openMetadata(t), nil, nil)
+func TestV2LegacyAuthEndpointsDoNotChangeSource(t *testing.T) {
+	handler, store := newV2HandlerWithAuth(t, openMetadata(t), nil, nil)
 	token := requestToken(t, handler)
-
-	missingAuth := httptest.NewRecorder()
-	handler.ServeHTTP(missingAuth, httptest.NewRequest(http.MethodGet, "/v2/auth/expire", nil))
-	if missingAuth.Code != http.StatusUnauthorized {
-		t.Fatalf("expire without auth status = %d, want %d", missingAuth.Code, http.StatusUnauthorized)
+	for _, path := range []string{"/v2/auth/expire", "/v2/auth/park"} {
+		for _, value := range []string{"", "unknown", token} {
+			response := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			if value != "" {
+				req.Header.Set("Authorization", authHeader(value))
+			}
+			handler.ServeHTTP(response, req)
+			if response.Code != http.StatusOK {
+				t.Fatalf("%s: status=%d", path, response.Code)
+			}
+			var flags map[string]bool
+			if err := json.Unmarshal(response.Body.Bytes(), &flags); err != nil {
+				t.Fatal(err)
+			}
+			for name, value := range flags {
+				if value {
+					t.Fatalf("legacy operation %s should be disabled", name)
+				}
+			}
+		}
 	}
-
-	expireResponse := httptest.NewRecorder()
-	expireReq := httptest.NewRequest(http.MethodGet, "/v2/auth/expire", nil)
-	expireReq.Header.Set("Authorization", authHeader(token))
-	handler.ServeHTTP(expireResponse, expireReq)
-	if expireResponse.Code != http.StatusOK {
-		t.Fatalf("expire status = %d, want %d", expireResponse.Code, http.StatusOK)
+	if next := requestToken(t, handler); next != token {
+		t.Fatal("legacy endpoints changed source token")
 	}
-
-	pull := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+ioHash([]byte("missing")), nil)
-	req.Header.Set("Authorization", authHeader(token))
-	handler.ServeHTTP(pull, req)
-	if pull.Code != http.StatusUnauthorized {
-		t.Fatalf("pull after expire status = %d, want %d", pull.Code, http.StatusUnauthorized)
-	}
-}
-
-func TestV2AuthParkAndWake(t *testing.T) {
-	handler, authStore := newV2HandlerWithAuth(t, openMetadata(t), nil, nil)
-	token := requestToken(t, handler)
-
-	park := httptest.NewRecorder()
-	parkReq := httptest.NewRequest(http.MethodGet, "/v2/auth/park", nil)
-	parkReq.Header.Set("Authorization", authHeader(token))
-	handler.ServeHTTP(park, parkReq)
-	if park.Code != http.StatusOK {
-		t.Fatalf("park status = %d, want %d; body=%q", park.Code, http.StatusOK, park.Body.String())
-	}
-	var parkBody struct {
-		Parked bool `json:"parked"`
-	}
-	if err := json.Unmarshal(park.Body.Bytes(), &parkBody); err != nil {
-		t.Fatalf("decode park: %v", err)
-	}
-	if !parkBody.Parked {
-		t.Fatalf("parked = false, want true")
-	}
-
-	pull := httptest.NewRecorder()
-	pullReq := httptest.NewRequest(http.MethodGet, "/v2/payload/pull?iohash="+ioHash([]byte("missing")), nil)
-	pullReq.Header.Set("Authorization", authHeader(token))
-	handler.ServeHTTP(pull, pullReq)
-	if pull.Code != http.StatusUnauthorized {
-		t.Fatalf("pull after park status = %d, want %d", pull.Code, http.StatusUnauthorized)
-	}
-
-	tokens, err := authStore.ListAll()
-	if err != nil {
-		t.Fatalf("ListAll: %v", err)
-	}
-	if len(tokens) != 1 || auth.TokenStatus(tokens[0], time.Now().UTC()) != "parked" {
-		t.Fatalf("token status after park = %#v", tokens)
-	}
-
-	woken := requestToken(t, handler)
-	if woken != token {
-		t.Fatalf("wake returned different token")
-	}
-	if _, err := authStore.Validate(woken); err != nil {
-		t.Fatalf("Validate after wake: %v", err)
+	record, err := store.Validate(token)
+	if err != nil || record.ParkedAt != nil || record.RevokedAt != nil || !record.ExpiresAt.IsZero() {
+		t.Fatalf("source lifecycle changed: %#v, %v", record, err)
 	}
 }
 
@@ -266,7 +227,7 @@ func TestV2MetadataExistsAndVCS(t *testing.T) {
 	}
 }
 
-func TestV2MetadataExistsRefreshesAuthExpiry(t *testing.T) {
+func TestV2MetadataExistsDoesNotRefreshSourceExpiry(t *testing.T) {
 	handler, authStore := newV2HandlerWithAuth(t, openMetadata(t), nil, nil)
 	token := requestToken(t, handler)
 
@@ -288,8 +249,8 @@ func TestV2MetadataExistsRefreshesAuthExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate after exists: %v", err)
 	}
-	if !after.ExpiresAt.After(before.ExpiresAt) {
-		t.Fatalf("expires_at after exists = %s, want after %s", after.ExpiresAt, before.ExpiresAt)
+	if !after.ExpiresAt.Equal(before.ExpiresAt) || !after.ExpiresAt.IsZero() {
+		t.Fatalf("source expiry changed: before=%s after=%s", before.ExpiresAt, after.ExpiresAt)
 	}
 }
 
@@ -377,13 +338,17 @@ func requestToken(t *testing.T, handler http.Handler) string {
 		t.Fatalf("auth request status = %d, want 200; body=%q", response.Code, response.Body.String())
 	}
 	var got struct {
-		Token string `json:"token"`
+		Token     string          `json:"token"`
+		ExpiresAt json.RawMessage `json:"expires_at"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode auth response: %v", err)
 	}
 	if got.Token == "" {
 		t.Fatalf("token is empty")
+	}
+	if string(got.ExpiresAt) != "null" {
+		t.Fatalf("source token should have no expiry: %s", got.ExpiresAt)
 	}
 	return got.Token
 }

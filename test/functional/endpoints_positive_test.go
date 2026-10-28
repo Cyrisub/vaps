@@ -125,6 +125,6 @@ func TestFunctionalPositiveInvalidBearerToken(t *testing.T) {
 	hash := ioHash([]byte("bad-token"))
 
 	resp := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", hash), "not-valid", nil)
-	requireStatus(t, resp, http.StatusUnauthorized)
+	requireStatus(t, resp, http.StatusNotFound)
 	readBody(t, resp)
 }

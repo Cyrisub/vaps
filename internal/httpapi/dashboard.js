@@ -34,7 +34,7 @@
     { href: "/dashboard/?page=sessions&status=all", page: "sessions", label: "Sessions" },
     { href: "/dashboard/errors", page: "errors", label: "Errors" },
     { href: "/dashboard/metadata", page: "metadata", label: "Payloads" },
-    { href: "/dashboard/auth", page: "auth", label: "Auth" },
+    { href: "/dashboard/auth", page: "auth", label: "Sources" },
     { href: "/dashboard/telemetry", page: "telemetry", label: "Telemetry" },
     { href: "/dashboard/info", page: "info", label: "Info" }
   ];

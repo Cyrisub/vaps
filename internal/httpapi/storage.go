@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"vaps/internal/blobstore"
@@ -23,6 +24,11 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 		return blobstore.Info{}, err
 	}
 	defer staged.Discard()
+	// Staging validates the hash. A bounded set of locks prevents concurrent
+	// requests from both observing an absent object and overwriting each other.
+	lockIndex, _ := strconv.ParseUint(hash[:2], 16, 8)
+	h.payloadWrites[lockIndex].Lock()
+	defer h.payloadWrites[lockIndex].Unlock()
 
 	created := false
 	etag := ""

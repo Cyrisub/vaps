@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VAPS Auth Browser</title>
+  <title>VAPS Request Sources</title>
   <link rel="stylesheet" href="/dashboard/static/dashboard.css">
   <script src="/dashboard/static/dashboard.js" defer></script>
   <style>
@@ -21,8 +21,8 @@
 </head>
 <body data-page="auth">
   <section class="vaps-sector">
-    <h1>Auth Browser</h1>
-    <p class="subtitle">Issued auth tokens, recent error counts, and cleanup actions.</p>
+    <h1>Request Sources</h1>
+    <p class="subtitle">Optional client registrations. Tokens never expire and do not restrict access.</p>
   </section>
 
   <section class="vaps-sector">
@@ -41,10 +41,7 @@
           Status
           <select id="status" name="status">
             <option value="">All</option>
-            <option value="active">Active</option>
-            <option value="parked">Parked</option>
-            <option value="expired">Expired</option>
-            <option value="revoked">Revoked</option>
+            <option value="tracked">Tracked</option>
           </select>
         </label>
         <label>
@@ -60,15 +57,15 @@
     <h2>Results</h2>
     <div class="panel">
       <div class="toolbar">
-        <p class="hint" id="summary">Loading auth tokens...</p>
+        <p class="hint" id="summary">Loading request sources...</p>
         <div class="pager">
-          <button id="clear-expired" type="button">Clear Expired</button>
-          <button id="clear-all" type="button">Clear All</button>
+          <button id="clear-all" type="button">Clear Registrations</button>
           <button id="prev" type="button">Previous</button>
           <button id="next" type="button">Next</button>
         </div>
       </div>
       <p class="error" id="error"></p>
+      <p class="hint">Request counts and recent activity cover this server process and reset on restart. Dashboard polling is excluded.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -80,9 +77,9 @@
               <th>Status</th>
               <th>Remote IP</th>
               <th>Created</th>
-              <th>Expires</th>
-              <th>Parked</th>
-              <th>Revoked</th>
+              <th>Last Seen</th>
+              <th>Requests</th>
+              <th>Last IP</th>
               <th>Errors</th>
             </tr>
           </thead>
@@ -95,7 +92,7 @@
   <div id="token-modal" class="modal-backdrop" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
       <div class="modal-header">
-        <h2 id="token-modal-title">Token Info</h2>
+        <h2 id="token-modal-title">Source Info</h2>
         <button id="token-modal-close" class="modal-close" type="button">Close</button>
       </div>
       <pre id="token-modal-body">{}</pre>
@@ -191,23 +188,23 @@
           <td><span class="pill ${escapeText(item.status || "")}">${escapeText(item.status || "")}</span></td>
           <td class="nowrap">${escapeText(formatRemoteIP(item.remote_ip))}</td>
           <td class="nowrap">${escapeText(formatDateTime(item.created_at))}</td>
-          <td class="nowrap">${escapeText(formatDateTime(item.expires_at))}</td>
-          <td class="nowrap">${escapeText(formatDateTime(item.parked_at))}</td>
-          <td class="nowrap">${escapeText(formatDateTime(item.revoked_at))}</td>
+          <td class="nowrap">${escapeText(formatDateTime(item.last_seen_at))}</td>
+          <td>${escapeText(String(item.request_count || 0))}</td>
+          <td class="nowrap">${escapeText(formatRemoteIP(item.last_remote_ip))}</td>
           <td>${item.error_count > 0
             ? `<a href="/dashboard/errors?token_hash=${encodeURIComponent(item.token_hash)}">${escapeText(String(item.error_count))}</a>`
             : "0"}</td>
         </tr>
       `).join("");
       if (items.length === 0) {
-        rows.innerHTML = '<tr><td colspan="11" class="hint">No auth tokens matched the query.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="11" class="hint">No request sources matched the query.</td></tr>';
       }
       rows.querySelectorAll("[data-token-index]").forEach((button) => {
         button.addEventListener("click", () => openTokenInfo(Number(button.getAttribute("data-token-index"))));
       });
       const start = data.total === 0 ? 0 : data.offset + 1;
       const end = data.offset + items.length;
-      summary.textContent = `Showing ${start}-${end} of ${data.total} tokens`;
+      summary.textContent = `Showing ${start}-${end} of ${data.total} sources`;
       document.getElementById("prev").disabled = data.offset <= 0;
       document.getElementById("next").disabled = data.offset + limit >= data.total;
     }
@@ -223,18 +220,13 @@
       const response = await fetch(path, { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
       const result = await response.json();
-      summary.textContent = `Deleted ${result.deleted || 0} token(s)`;
+      summary.textContent = `Deleted ${result.deleted || 0} registration(s)`;
       state.offset = 0;
       await load();
     }
 
-    document.getElementById("clear-expired").addEventListener("click", () => {
-      clearTokens("/dashboard/auth/clear-expired", "Delete all expired tokens from the auth database?").catch((err) => {
-        error.textContent = err.message;
-      });
-    });
     document.getElementById("clear-all").addEventListener("click", () => {
-      clearTokens("/dashboard/auth/clear-all", "Delete ALL auth tokens? Active clients will need to request new tokens.").catch((err) => {
+      clearTokens("/dashboard/auth/clear-all", "Delete all source registrations? Requests will continue; clients must register again to restore source labels.").catch((err) => {
         error.textContent = err.message;
       });
     });

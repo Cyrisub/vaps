@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -48,27 +47,13 @@ func (h *Handler) authRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) authExpire(w http.ResponseWriter, r *http.Request) {
-	token, ok := h.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if err := h.auth.Revoke(token); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, authExpireResponse{Expired: true})
+	// Compatibility endpoint: source registrations are never revoked.
+	writeJSON(w, http.StatusOK, authExpireResponse{Expired: false})
 }
 
 func (h *Handler) authPark(w http.ResponseWriter, r *http.Request) {
-	token, ok := h.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if err := h.auth.Park(token); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	writeJSON(w, http.StatusOK, authParkResponse{Parked: true})
+	// Compatibility endpoint: source registrations are never parked.
+	writeJSON(w, http.StatusOK, authParkResponse{Parked: false})
 }
 
 func clientIP(r *http.Request) string {
@@ -86,5 +71,3 @@ func formatHTTPTime(unix int64) string {
 func formatExpires(sessionExpires time.Time) int64 {
 	return sessionExpires.UTC().Unix()
 }
-
-var errUnauthorized = errors.New("unauthorized")

@@ -33,11 +33,11 @@ func TestFunctionalV2AuthFlow(t *testing.T) {
 	readBody(t, expireResp)
 
 	pull := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", ioHash([]byte("missing"))), token, nil)
-	requireStatus(t, pull, http.StatusUnauthorized)
+	requireStatus(t, pull, http.StatusNotFound)
 	readBody(t, pull)
 }
 
-func TestFunctionalV2AuthParkAndWake(t *testing.T) {
+func TestFunctionalV2AuthParkDoesNotChangeSource(t *testing.T) {
 	srv := testserver.Start(t, testserver.Options{})
 	token := requestToken(t, srv.Client, srv.URL)
 
@@ -46,7 +46,7 @@ func TestFunctionalV2AuthParkAndWake(t *testing.T) {
 	readBody(t, parkResp)
 
 	pull := authRequest(t, srv.Client, http.MethodGet, urlf(srv.URL, "/v2/payload/pull?iohash=%s", ioHash([]byte("missing"))), token, nil)
-	requireStatus(t, pull, http.StatusUnauthorized)
+	requireStatus(t, pull, http.StatusNotFound)
 	readBody(t, pull)
 
 	woken := requestToken(t, srv.Client, srv.URL)
@@ -254,7 +254,7 @@ func TestFunctionalV2TusCreationWithUpload(t *testing.T) {
 	}
 }
 
-func TestFunctionalV2UnauthorizedWithoutToken(t *testing.T) {
+func TestFunctionalV2MissingPayloadWithoutToken(t *testing.T) {
 	srv := testserver.Start(t, testserver.Options{})
 	hash := ioHash([]byte("secret"))
 
@@ -262,7 +262,7 @@ func TestFunctionalV2UnauthorizedWithoutToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET without token: %v", err)
 	}
-	requireStatus(t, resp, http.StatusUnauthorized)
+	requireStatus(t, resp, http.StatusNotFound)
 	readBody(t, resp)
 }
 
