@@ -169,6 +169,45 @@ Warning and error access logs are written for HTTP requests; successful and redi
 
 S3 is the authoritative payload store. Each upload is verified against the client-provided UE `FIoHash` and a CRC32C (Castagnoli) checksum of the transmitted bytes, then synchronously committed to S3 before VAPS returns success; the resulting S3 ETag is stored in metadata. On startup, VAPS lists the configured prefix with `ListObjectsV2` and validates object presence, key/hash, size, and ETag. Legacy metadata without an ETag performs a one-time `HeadObject` fallback that also records the ETag. Checksum validation runs immediately before a remote pull; local cache hits do not access S3. VAPS exits if validation fails. Credentials are read from `VAPS_STORAGE_S3_SECRETID` and `VAPS_STORAGE_S3_SECRETKEY`; a `.env` file beside the binary overrides those process environment variables. `storage.s3.endpoint` is required and must be an `http` or `https` URL; `storage.s3.force_path_style` supports MinIO and other S3-compatible services.
 
+### Multiple persistent backends and SMB
+
+An ordered `[[storage.backends]]` array replaces the legacy single `[storage.s3]` backend. Each entry has a unique, stable `name` and a `type` of `s3` or `filesystem`. Existing single-backend configurations continue to work unchanged. Keep the existing S3 backend's name as `s3` so stored legacy ETags retain their scope. Multiple S3 entries use the same credentials loaded from the environment or `.env`.
+
+Uploads are validated, written to a durable local replication outbox, and committed to the first backend before success is returned. Additional backends receive the same payload asynchronously. Failed writes remain queued and retry after `storage.replication_retry_interval` (default `10s`), with `storage.replication_workers` workers (default `4`). Restarting the service reloads unfinished jobs from `storage.replication_dir` (default `data/replication`). Keep this directory on persistent local disk and retain it during upgrades and backups; a full disk causes new uploads to fail instead of silently losing pending replicas. The outbox must not overlap a filesystem backend's directory.
+
+Reads try backends in order, including ranged reads. Hash, size, and CRC32C metadata are checked, and ETags are tracked separately by backend. A filesystem backend also verifies its stored bytes before serving them. Startup validates metadata against the union of available backends; it does not require an object to exist on every backend. Existing remote payloads are not scanned for replication or copied to newly added backends. Uploading an existing payload again queues it for all currently configured backends.
+
+For Samba, mount the share through the operating system and point a `filesystem` backend at a dedicated directory on it:
+
+```toml
+[storage]
+replication_dir = "data/replication"
+replication_workers = 4
+replication_retry_interval = "10s"
+
+[[storage.backends]]
+name = "s3"
+type = "s3"
+[storage.backends.s3]
+bucket = "vaps-payloads"
+region = "us-east-1"
+endpoint = "https://s3.example.com"
+prefix = "payloads"
+force_path_style = false
+
+[[storage.backends]]
+name = "smb"
+type = "filesystem"
+dir = "/mnt/vaps-smb/vaps-payloads"
+mount_source = "//server/share"
+```
+
+`mount_source` checks the actual SMB mount before every filesystem operation on Linux, including reads. If the mount disappears or a different filesystem occupies its location, VAPS refuses to access it and keeps replica jobs queued. An unavailable secondary mount does not prevent the preferred backend from serving. Mounting, guest access or credentials, and mounting after boot are managed outside VAPS. Without `mount_source`, `filesystem` also supports an ordinary local directory on all supported platforms.
+
+The filesystem object format is `<dir>/<hash[0:2]>/<hash[2:4]>/<hash>/payload` plus `info.json` in the same directory. VAPS publishes them together, verifies CRC32C, and records a SHA256 ETag. Use a dedicated directory; arbitrary pre-existing files on a share are not automatically imported. Filesystem backends are persistent stores and are never evicted by the local cache limit.
+
+The Server Info dashboard and `/dashboard/info.json` list configured backends and expose `config.replication.pending_objects` and `last_error`. A successful upload guarantees the preferred remote copy and durable local queue, while additional copies may still be pending.
+
 ## HTTP API
 
 Payload, source registration, and VCS metadata APIs are exposed under `/v2`.

@@ -940,7 +940,7 @@ func (h *Handler) openDiskOrRemote(ctx context.Context, hash string) (io.ReadClo
 		}
 		return nil, blobstore.Info{}, false, err
 	}
-	if opened.ETag != remote.ETag {
+	if !objectstore.ETagMatches(remote.ETag, remote.Backend, opened) || validateRemotePayload(record, opened) != nil {
 		_ = reader.Close()
 		return nil, blobstore.Info{}, false, objectstore.ErrIntegrityMismatch
 	}

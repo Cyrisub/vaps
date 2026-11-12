@@ -51,16 +51,18 @@ type dashboardInfoPaths struct {
 }
 
 type dashboardInfoConfig struct {
-	CacheBytes            *int64           `json:"cache_bytes,omitempty"`
-	CacheMaxObjectBytes   *int64           `json:"cache_max_object_bytes,omitempty"`
-	AuthExpireTime        string           `json:"auth_expire_time"`
-	UploadDirectMaxBytes  int64            `json:"upload_direct_max_bytes"`
-	UploadExpiration      string           `json:"upload_expiration"`
-	UploadCleanupInterval string           `json:"upload_cleanup_interval"`
-	StatusLogInterval     string           `json:"status_log_interval"`
-	LogRetentionDays      int              `json:"log_retention_days"`
-	InfoRefreshInterval   string           `json:"info_refresh_interval"`
-	COS                   dashboardInfoCOS `json:"cos"`
+	CacheBytes            *int64                         `json:"cache_bytes,omitempty"`
+	CacheMaxObjectBytes   *int64                         `json:"cache_max_object_bytes,omitempty"`
+	AuthExpireTime        string                         `json:"auth_expire_time"`
+	UploadDirectMaxBytes  int64                          `json:"upload_direct_max_bytes"`
+	UploadExpiration      string                         `json:"upload_expiration"`
+	UploadCleanupInterval string                         `json:"upload_cleanup_interval"`
+	StatusLogInterval     string                         `json:"status_log_interval"`
+	LogRetentionDays      int                            `json:"log_retention_days"`
+	InfoRefreshInterval   string                         `json:"info_refresh_interval"`
+	COS                   dashboardInfoCOS               `json:"cos"`
+	StorageBackends       []StorageBackendInfo           `json:"storage_backends,omitempty"`
+	Replication           *objectstore.ReplicationStatus `json:"replication,omitempty"`
 }
 
 type dashboardInfoCOS struct {
@@ -144,6 +146,11 @@ func (h *Handler) collectDashboardInfo(ctx context.Context) dashboardInfoRespons
 		LogRetentionDays:      h.opts.LogRetentionDays,
 		InfoRefreshInterval:   h.opts.InfoRefreshInterval.String(),
 		COS:                   cos,
+		StorageBackends:       h.opts.StorageBackends,
+	}
+	if reporter, ok := h.objects.(objectstore.ReplicationReporter); ok {
+		status := reporter.ReplicationStatus()
+		config.Replication = &status
 	}
 	if h.opts.CacheBytes > 0 {
 		cacheBytes := h.opts.CacheBytes

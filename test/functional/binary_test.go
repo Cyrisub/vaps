@@ -21,16 +21,7 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 		t.Skip("skipping binary functional test in short mode")
 	}
 
-	binary := filepath.Join(t.TempDir(), "vaps")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", binary, "./cmd/vaps")
-	build.Dir = projectRoot(t)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build vaps: %v\n%s", err, out)
-	}
-
+	binary := functionalBinary(t)
 	root := t.TempDir()
 	s3 := newBinaryS3Server(t)
 	dataDir := filepath.Join(root, "data")
@@ -104,6 +95,27 @@ func TestFunctionalBinaryProcess(t *testing.T) {
 	if !bytes.Equal(readBody(t, pull), payload) {
 		t.Fatalf("pull body mismatch from binary process")
 	}
+}
+
+// VAPS_FUNCTIONAL_BINARY lets a host run these tests against a cross-built binary.
+func functionalBinary(t *testing.T) string {
+	t.Helper()
+	if binary := os.Getenv("VAPS_FUNCTIONAL_BINARY"); binary != "" {
+		if _, err := os.Stat(binary); err != nil {
+			t.Fatal(err)
+		}
+		return binary
+	}
+	binary := filepath.Join(t.TempDir(), "vaps")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/vaps")
+	build.Dir = projectRoot(t)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build vaps: %v\n%s", err, out)
+	}
+	return binary
 }
 
 type binaryS3Server struct {

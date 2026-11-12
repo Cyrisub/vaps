@@ -65,8 +65,20 @@ type DashboardConfig struct {
 }
 
 type StorageConfig struct {
-	S3    S3StorageConfig    `toml:"s3" embed:"" prefix:"s3-"`
-	Local LocalStorageConfig `toml:"local" embed:"" prefix:"local-"`
+	ReplicationDir           string             `toml:"replication_dir" hidden:"" name:"replication-dir"`
+	ReplicationWorkers       int                `toml:"replication_workers" hidden:"" name:"replication-workers"`
+	ReplicationRetryInterval Duration           `toml:"replication_retry_interval" hidden:"" name:"replication-retry-interval"`
+	Backends                 []BackendConfig    `toml:"backends" kong:"-"`
+	S3                       S3StorageConfig    `toml:"s3" embed:"" prefix:"s3-"`
+	Local                    LocalStorageConfig `toml:"local" embed:"" prefix:"local-"`
+}
+
+type BackendConfig struct {
+	Name        string          `toml:"name"`
+	Type        string          `toml:"type"`
+	Dir         string          `toml:"dir"`
+	MountSource string          `toml:"mount_source"`
+	S3          S3StorageConfig `toml:"s3"`
 }
 
 type S3StorageConfig struct {
@@ -132,7 +144,26 @@ func FromArgsWithBaseDir(args []string, baseDir string) (Config, error) {
 	cfg.UploadDB = resolvePath(baseDir, cfg.UploadDB)
 	cfg.Upload.Dir = resolvePath(baseDir, cfg.Upload.Dir)
 	cfg.Storage.Local.Dir = resolvePath(baseDir, cfg.Storage.Local.Dir)
+	cfg.Storage.ReplicationDir = resolvePath(baseDir, cfg.Storage.ReplicationDir)
+	for i := range cfg.Storage.Backends {
+		if cfg.Storage.Backends[i].Type == "filesystem" {
+			cfg.Storage.Backends[i].Dir = resolvePath(baseDir, cfg.Storage.Backends[i].Dir)
+		}
+	}
+	for _, backend := range cfg.Storage.Backends {
+		if backend.Type == "filesystem" && pathsOverlap(backend.Dir, cfg.Storage.ReplicationDir) {
+			return Config{}, fmt.Errorf("backend %s directory overlaps the replication queue", backend.Name)
+		}
+	}
 	return cfg, nil
+}
+
+func pathsOverlap(a, b string) bool {
+	inside := func(parent, child string) bool {
+		rel, err := filepath.Rel(parent, child)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	return inside(a, b) || inside(b, a)
 }
 
 func (d Duration) String() string {
@@ -201,6 +232,17 @@ func normalize(cfg *Config) {
 	cfg.Storage.S3.Region = strings.TrimSpace(cfg.Storage.S3.Region)
 	cfg.Storage.S3.Endpoint = strings.TrimSpace(cfg.Storage.S3.Endpoint)
 	cfg.Storage.S3.Prefix = strings.Trim(cfg.Storage.S3.Prefix, "/")
+	for i := range cfg.Storage.Backends {
+		b := &cfg.Storage.Backends[i]
+		b.Name = strings.TrimSpace(b.Name)
+		b.Type = strings.ToLower(strings.TrimSpace(b.Type))
+		b.Dir = strings.TrimSpace(b.Dir)
+		b.MountSource = strings.TrimRight(strings.TrimSpace(b.MountSource), "/")
+		b.S3.Bucket = strings.TrimSpace(b.S3.Bucket)
+		b.S3.Region = strings.TrimSpace(b.S3.Region)
+		b.S3.Endpoint = strings.TrimSpace(b.S3.Endpoint)
+		b.S3.Prefix = strings.Trim(b.S3.Prefix, "/")
+	}
 }
 
 func validate(cfg Config) error {
@@ -231,13 +273,54 @@ func validate(cfg Config) error {
 	if time.Duration(cfg.Metadata.ProgressInterval) <= 0 {
 		return errors.New("metadata-progress-interval must be positive")
 	}
-	if cfg.Storage.S3.Bucket == "" {
+	if len(cfg.Storage.Backends) == 0 {
+		if err := validateS3(cfg.Storage.S3); err != nil {
+			return err
+		}
+	} else {
+		seen := make(map[string]bool)
+		if cfg.Storage.ReplicationDir == "" || cfg.Storage.ReplicationWorkers < 1 || time.Duration(cfg.Storage.ReplicationRetryInterval) <= 0 {
+			return errors.New("replication directory, positive workers and retry interval are required")
+		}
+		for _, backend := range cfg.Storage.Backends {
+			if backend.Name == "" || seen[backend.Name] {
+				return errors.New("storage backend names must be nonempty and unique")
+			}
+			seen[backend.Name] = true
+			switch backend.Type {
+			case "s3":
+				if err := validateS3(backend.S3); err != nil {
+					return fmt.Errorf("backend %s: %w", backend.Name, err)
+				}
+			case "filesystem":
+				if backend.Dir == "" {
+					return fmt.Errorf("backend %s: dir is required", backend.Name)
+				}
+				if backend.MountSource != "" && !strings.HasPrefix(backend.MountSource, "//") {
+					return fmt.Errorf("backend %s: mount_source must be //server/share", backend.Name)
+				}
+			default:
+				return fmt.Errorf("backend %s: type must be s3 or filesystem", backend.Name)
+			}
+		}
+	}
+	if cfg.Storage.Local.Dir == "" {
+		return errors.New("storage-local-dir is required")
+	}
+	if cfg.Storage.Local.MaxCacheBytes < 0 {
+		return errors.New("storage-local-max-cache-bytes must not be negative")
+	}
+	return nil
+}
+
+func validateS3(cfg S3StorageConfig) error {
+	if cfg.Bucket == "" {
 		return errors.New("storage-s3-bucket is required")
 	}
-	if cfg.Storage.S3.Region == "" {
+	if cfg.Region == "" {
 		return errors.New("storage-s3-region is required")
 	}
-	if endpoint := cfg.Storage.S3.Endpoint; endpoint == "" {
+	if endpoint := cfg.Endpoint; endpoint == "" {
 		return errors.New("storage-s3-endpoint is required")
 	} else {
 		parsed, err := url.Parse(endpoint)
@@ -249,12 +332,6 @@ func validate(cfg Config) error {
 			parsed.Fragment != "" {
 			return errors.New("storage-s3-endpoint must be a valid http(s) URL")
 		}
-	}
-	if cfg.Storage.Local.Dir == "" {
-		return errors.New("storage-local-dir is required")
-	}
-	if cfg.Storage.Local.MaxCacheBytes < 0 {
-		return errors.New("storage-local-max-cache-bytes must not be negative")
 	}
 	return nil
 }

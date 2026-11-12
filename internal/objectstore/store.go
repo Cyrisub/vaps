@@ -16,6 +16,8 @@ var (
 type Info struct {
 	Hash           string
 	ETag           string
+	Backend        string
+	ETags          map[string]string `json:"-"`
 	Checksum       string
 	LegacyChecksum string
 	Size           int64
@@ -48,4 +50,31 @@ type StatsStore interface {
 // reading the entire object into application memory.
 type RangeStore interface {
 	OpenRange(context.Context, string, int64, int64) (io.ReadCloser, Info, error)
+}
+
+// ETagMatches compares provider-specific ETags only within the same backend.
+// Old records without a backend name belong to the legacy "s3" backend.
+func ETagMatches(etag, backend string, remote Info) bool {
+	return etag == "" || !SameBackend(backend, remote.Backend) || etag == remote.ETag
+}
+
+func SameBackend(backend, actual string) bool {
+	if backend == "" {
+		backend = "s3"
+	}
+	if actual == "" {
+		actual = "s3"
+	}
+	return backend == actual
+}
+
+// MirroredStore must also receive duplicate uploads to repair partial writes.
+type MirroredStore interface {
+	Store
+	Mirrored() bool
+}
+
+// WriteHeadStore avoids consulting asynchronous replicas on the upload path.
+type WriteHeadStore interface {
+	HeadForWrite(context.Context, string) (Info, error)
 }

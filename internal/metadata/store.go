@@ -37,26 +37,30 @@ func (s PayloadStatus) IsCached() bool {
 }
 
 type Payload struct {
-	Hash           string        `json:"hash"`
-	ETag           string        `json:"etag,omitempty"`
-	Checksum       string        `json:"checksum"`
-	LegacyChecksum string        `json:"-"`
-	Size           int64         `json:"size"`
-	Status         PayloadStatus `json:"status"`
-	CreatedAt      *time.Time    `json:"created_at"`
-	LastAccessedAt *time.Time    `json:"last_accessed_at,omitempty"`
+	Hash           string            `json:"hash"`
+	ETag           string            `json:"etag,omitempty"`
+	ETagBackend    string            `json:"etag_backend,omitempty"`
+	ETags          map[string]string `json:"etags,omitempty"`
+	Checksum       string            `json:"checksum"`
+	LegacyChecksum string            `json:"-"`
+	Size           int64             `json:"size"`
+	Status         PayloadStatus     `json:"status"`
+	CreatedAt      *time.Time        `json:"created_at"`
+	LastAccessedAt *time.Time        `json:"last_accessed_at,omitempty"`
 }
 
 func (p *Payload) UnmarshalJSON(data []byte) error {
 	var value struct {
-		Hash           string        `json:"hash"`
-		ETag           string        `json:"etag"`
-		Checksum       string        `json:"checksum"`
-		LegacyChecksum string        `json:"content_hash"`
-		Size           int64         `json:"size"`
-		Status         PayloadStatus `json:"status"`
-		CreatedAt      *time.Time    `json:"created_at"`
-		LastAccessedAt *time.Time    `json:"last_accessed_at,omitempty"`
+		Hash           string            `json:"hash"`
+		ETag           string            `json:"etag"`
+		ETagBackend    string            `json:"etag_backend"`
+		ETags          map[string]string `json:"etags"`
+		Checksum       string            `json:"checksum"`
+		LegacyChecksum string            `json:"content_hash"`
+		Size           int64             `json:"size"`
+		Status         PayloadStatus     `json:"status"`
+		CreatedAt      *time.Time        `json:"created_at"`
+		LastAccessedAt *time.Time        `json:"last_accessed_at,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -64,6 +68,8 @@ func (p *Payload) UnmarshalJSON(data []byte) error {
 	*p = Payload{
 		Hash:           value.Hash,
 		ETag:           value.ETag,
+		ETagBackend:    value.ETagBackend,
+		ETags:          value.ETags,
 		Checksum:       value.Checksum,
 		LegacyChecksum: value.LegacyChecksum,
 		Size:           value.Size,
@@ -72,6 +78,40 @@ func (p *Payload) UnmarshalJSON(data []byte) error {
 		LastAccessedAt: value.LastAccessedAt,
 	}
 	return nil
+}
+
+func backendKey(name string) string {
+	if name == "" {
+		return "s3"
+	}
+	return name
+}
+
+// ExpectedETag retains independent version identities across read failover.
+func (p Payload) ExpectedETag(backend string) string {
+	if value := p.ETags[backendKey(backend)]; value != "" {
+		return value
+	}
+	if backendKey(backend) == backendKey(p.ETagBackend) {
+		return p.ETag
+	}
+	return ""
+}
+
+func (p *Payload) RecordETag(backend, etag string) {
+	if etag == "" {
+		return
+	}
+	values := make(map[string]string, len(p.ETags)+2)
+	for key, value := range p.ETags {
+		values[key] = value
+	}
+	if p.ETag != "" {
+		values[backendKey(p.ETagBackend)] = p.ETag
+	}
+	values[backendKey(backend)] = etag
+	p.ETags = values
+	p.ETag, p.ETagBackend = etag, backend
 }
 
 type Stats struct {

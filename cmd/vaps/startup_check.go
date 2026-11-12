@@ -110,11 +110,11 @@ func validateMetadataPayloadsWithList(
 				remote.Size,
 			)
 		}
-		if payload.ETag == "" {
+		if payload.ExpectedETag(remote.Backend) == "" {
 			missingETag = append(missingETag, payload)
 			continue
 		}
-		if remote.ETag == "" || remote.ETag != payload.ETag {
+		if remote.ETag == "" || remote.ETag != payload.ExpectedETag(remote.Backend) {
 			return fmt.Errorf(
 				"metadata payload %q does not match S3 object ETag %q",
 				payload.Hash,
@@ -210,18 +210,18 @@ func validateMetadataPayloadsWithHead(
 				} else {
 					err = validateMetadataPayloadInfo(payload, remote)
 				}
-				if err == nil && payload.ETag != "" && remote.ETag != payload.ETag {
+				if expected := payload.ExpectedETag(remote.Backend); err == nil && expected != "" && expected != remote.ETag {
 					err = fmt.Errorf(
 						"metadata payload %q does not match S3 object ETag %q",
 						payload.Hash,
 						remote.ETag,
 					)
 				}
-				if err == nil && persistETag && payload.ETag == "" {
+				if err == nil && persistETag && payload.ExpectedETag(remote.Backend) == "" {
 					if remote.ETag == "" {
 						err = fmt.Errorf("metadata payload %q has no S3 object ETag", payload.Hash)
 					} else {
-						payload.ETag = remote.ETag
+						payload.RecordETag(remote.Backend, remote.ETag)
 						err = meta.PutPayload(payload)
 					}
 				}

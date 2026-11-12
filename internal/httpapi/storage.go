@@ -32,13 +32,24 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 
 	created := false
 	etag := ""
+	backend := ""
+	var etags map[string]string
 	if h.objects != nil {
-		remote, headErr := h.objects.Head(ctx, hash)
+		mirrors, mirrored := h.objects.(objectstore.MirroredStore)
+		mirrored = mirrored && mirrors.Mirrored()
+		var remote objectstore.Info
+		var headErr error
+		if preferred, ok := h.objects.(objectstore.WriteHeadStore); ok {
+			remote, headErr = preferred.HeadForWrite(ctx, hash)
+		} else {
+			remote, headErr = h.objects.Head(ctx, hash)
+		}
 		if headErr == nil {
 			etag = remote.ETag
+			backend = remote.Backend
 		}
 		switch {
-		case errors.Is(headErr, objectstore.ErrNotFound):
+		case errors.Is(headErr, objectstore.ErrNotFound) || (mirrored && headErr != nil):
 			file, err := staged.Open()
 			if err != nil {
 				return blobstore.Info{}, err
@@ -57,6 +68,8 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 			}
 			created = true
 			etag = putInfo.ETag
+			backend = putInfo.Backend
+			etags = putInfo.ETags
 		case headErr != nil:
 			return blobstore.Info{}, headErr
 		case remote.LegacyChecksum != "":
@@ -69,6 +82,19 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 			}
 		case remote.Checksum != staged.Checksum || remote.Size != staged.Size:
 			return blobstore.Info{}, fmt.Errorf("%w: existing object does not match upload", objectstore.ErrIntegrityMismatch)
+		}
+		if mirrored && headErr == nil {
+			file, err := staged.Open()
+			if err != nil {
+				return blobstore.Info{}, err
+			}
+			stored, putErr := h.objects.Put(ctx, objectstore.Info{Hash: staged.Hash, Checksum: staged.Checksum, Size: staged.Size}, file)
+			closeErr := file.Close()
+			if err := errors.Join(putErr, closeErr); err != nil {
+				return blobstore.Info{}, err
+			}
+			etag, backend = stored.ETag, stored.Backend
+			etags = stored.ETags
 		}
 	}
 
@@ -83,6 +109,8 @@ func (h *Handler) putPayloadDurably(ctx context.Context, hash, checksum string, 
 		log.Printf("local cache publish failed hash=%s error=%q", hash, publishErr)
 	}
 	info.ETag = etag
+	info.Backend = backend
+	info.ETags = etags
 	return info, nil
 }
 
@@ -100,12 +128,14 @@ func (h *Handler) commitPayloadMetadata(info blobstore.Info) error {
 	record, err := h.meta.GetPayload(info.Hash)
 	if errors.Is(err, metadata.ErrNotFound) {
 		return h.meta.PutPayload(metadata.Payload{
-			Hash:      info.Hash,
-			ETag:      info.ETag,
-			Checksum:  info.Checksum,
-			Size:      info.Size,
-			Status:    status,
-			CreatedAt: &now,
+			Hash:        info.Hash,
+			ETag:        info.ETag,
+			ETagBackend: info.Backend,
+			ETags:       info.ETags,
+			Checksum:    info.Checksum,
+			Size:        info.Size,
+			Status:      status,
+			CreatedAt:   &now,
 		})
 	}
 	if err != nil {
@@ -116,7 +146,10 @@ func (h *Handler) commitPayloadMetadata(info blobstore.Info) error {
 	}
 	record.Checksum = info.Checksum
 	if info.ETag != "" {
-		record.ETag = info.ETag
+		for name, etag := range info.ETags {
+			record.RecordETag(name, etag)
+		}
+		record.RecordETag(info.Backend, info.ETag)
 	}
 	record.Size = info.Size
 	record.Status = status
@@ -151,7 +184,7 @@ func validateRemotePayload(record metadata.Payload, remote objectstore.Info) err
 			record.Size,
 		)
 	}
-	if record.ETag != "" && remote.ETag != record.ETag {
+	if expected := record.ExpectedETag(remote.Backend); expected != "" && expected != remote.ETag {
 		return fmt.Errorf(
 			"%w: remote object ETag %q does not match metadata ETag %q",
 			objectstore.ErrIntegrityMismatch,
@@ -163,10 +196,10 @@ func validateRemotePayload(record metadata.Payload, remote objectstore.Info) err
 }
 
 func (h *Handler) recordPayloadETag(record *metadata.Payload, remote objectstore.Info) error {
-	if h.meta == nil || record.ETag != "" || remote.ETag == "" {
+	if h.meta == nil || remote.ETag == "" || (record.ETag != "" && objectstore.SameBackend(record.ETagBackend, remote.Backend)) {
 		return nil
 	}
-	record.ETag = remote.ETag
+	record.RecordETag(remote.Backend, remote.ETag)
 	return h.meta.PutPayload(*record)
 }
 
@@ -201,6 +234,7 @@ func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payl
 			}
 			if record.ETag == "" && remote.ETag != "" {
 				record.ETag = remote.ETag
+				record.ETagBackend = remote.Backend
 				changed = true
 			}
 			if changed {
@@ -234,12 +268,13 @@ func (h *Handler) payloadRecord(ctx context.Context, hash string) (metadata.Payl
 	}
 	now := time.Now().UTC()
 	record = metadata.Payload{
-		Hash:      remote.Hash,
-		ETag:      remote.ETag,
-		Checksum:  remote.Checksum,
-		Size:      remote.Size,
-		Status:    metadata.StatusStored,
-		CreatedAt: &now,
+		Hash:        remote.Hash,
+		ETag:        remote.ETag,
+		ETagBackend: remote.Backend,
+		Checksum:    remote.Checksum,
+		Size:        remote.Size,
+		Status:      metadata.StatusStored,
+		CreatedAt:   &now,
 	}
 	if err := h.meta.PutPayload(record); err != nil {
 		return metadata.Payload{}, err

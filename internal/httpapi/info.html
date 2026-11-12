@@ -149,6 +149,17 @@
         ["info refresh", cfg.info_refresh_interval],
         ["log retention days", cfg.log_retention_days],
       ];
+	  const backends = cfg.storage_backends || [];
+	  if (backends.length > 0) {
+	    configRows.unshift(["persistent writes", "preferred backend + durable queue; replicas async"]);
+	    backends.forEach((backend, index) => {
+	      configRows.unshift(["storage " + (index + 1) + " · " + backend.name, backend.type + " · " + backend.location]);
+	    });
+	  }
+      if (cfg.replication) {
+        configRows.push(["pending replication", cfg.replication.pending_objects]);
+        if (cfg.replication.last_error) configRows.push(["replication error", cfg.replication.last_error]);
+      }
       if (cos.stats_error) {
         configRows.splice(6, 0, ["cos stats error", cos.stats_error]);
       }

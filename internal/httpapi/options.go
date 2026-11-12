@@ -24,8 +24,15 @@ type Options struct {
 	CosRegion           string
 	CosBucket           string
 	CosPrefix           string
+	StorageBackends     []StorageBackendInfo
 	InfoRefreshInterval time.Duration
 	StartedAt           time.Time
+}
+
+type StorageBackendInfo struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Location string `json:"location"`
 }
 
 func defaultOptions() Options {

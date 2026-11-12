@@ -47,12 +47,6 @@ func run() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	credentials, err := objectstore.LoadS3Credentials(filepath.Dir(executable))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-
 	logWriter, err := setupLogging(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -66,7 +60,15 @@ func run() int {
 		log.Printf("vaps stopped exit_code=%d", exitCode)
 		_ = logWriter.Close()
 	}()
+	objects, err := openPersistentStorage(ctx, cfg, filepath.Dir(executable))
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
 
+	if async, ok := objects.(*objectstore.AsyncStore); ok {
+		defer func() { stop(); async.Wait() }()
+	}
 	metadataStartedAt := time.Now()
 	log.Printf("metadata database opening path=%s", cfg.MetadataDB)
 	meta, err := metadata.Open(cfg.MetadataDB)
@@ -78,19 +80,6 @@ func run() int {
 	log.Printf("metadata database opened path=%s duration=%s", cfg.MetadataDB, formatElapsed(time.Since(metadataStartedAt)))
 
 	store := blobstore.NewWithMaxBytes(cfg.Storage.Local.Dir, cfg.Storage.Local.MaxCacheBytes.Int64())
-	log.Printf("object store initializing bucket=%s endpoint=%s", cfg.Storage.S3.Bucket, cfg.Storage.S3.Endpoint)
-	objects, err := objectstore.NewS3(ctx, objectstore.S3Config{
-		Bucket:         cfg.Storage.S3.Bucket,
-		Region:         cfg.Storage.S3.Region,
-		Endpoint:       cfg.Storage.S3.Endpoint,
-		Prefix:         cfg.Storage.S3.Prefix,
-		ForcePathStyle: cfg.Storage.S3.ForcePathStyle,
-		Credentials:    credentials,
-	})
-	if err != nil {
-		log.Print(err)
-		return 1
-	}
 	log.Printf("object store initialized")
 	if err := validateMetadataPayloadsWithOptions(ctx, meta, objects, metadataValidationOptions{
 		Workers:          cfg.Metadata.Workers,
@@ -138,6 +127,7 @@ func run() int {
 		CosRegion:             cfg.Storage.S3.Region,
 		CosBucket:             cfg.Storage.S3.Bucket,
 		CosPrefix:             cfg.Storage.S3.Prefix,
+		StorageBackends:       storageBackendInfo(cfg),
 		InfoRefreshInterval:   time.Duration(cfg.Dashboard.InfoRefreshInterval),
 		StartedAt:             startedAt,
 	}).HTTPHandler()

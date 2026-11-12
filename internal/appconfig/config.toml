@@ -34,6 +34,12 @@ dir = "data/uploads"
 [dashboard]
 info_refresh_interval = "5s"
 
+[storage]
+# A durable local outbox for new uploads to additional persistent backends.
+replication_dir = "data/replication"
+replication_workers = 4
+replication_retry_interval = "10s"
+
 [storage.s3]
 bucket = "vaps-payloads"
 region = "us-east-1"
@@ -44,3 +50,23 @@ force_path_style = false
 [storage.local]
 dir = "data"
 max_cache_bytes = "100GiB"
+
+# Optional ordered persistent backends. When present, these replace storage.s3.
+# Upload success requires the first backend and the durable local outbox.
+# Additional backends are written asynchronously with persistent retries.
+# Reads fall back in order. Existing objects are not scanned or copied.
+# Preserve the name "s3" for an existing legacy S3 backend's ETag scope.
+# [[storage.backends]]
+# name = "s3"
+# type = "s3"
+# [storage.backends.s3]
+# bucket = "vaps-payloads"
+# region = "us-east-1"
+# endpoint = "https://s3.example.com"
+# prefix = "payloads"
+#
+# [[storage.backends]]
+# name = "smb"
+# type = "filesystem"
+# dir = "/mnt/vaps-smb/vaps-payloads"
+# mount_source = "//server/share" # Linux: refuse access unless this SMB share is mounted.

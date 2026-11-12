@@ -26,11 +26,13 @@ type Store struct {
 }
 
 type Info struct {
-	Hash     string `json:"hash"`
-	ETag     string `json:"etag,omitempty"`
-	Checksum string `json:"checksum,omitempty"`
-	Size     int64  `json:"size"`
-	Created  bool   `json:"stored"`
+	Hash     string            `json:"hash"`
+	ETag     string            `json:"etag,omitempty"`
+	Backend  string            `json:"etag_backend,omitempty"`
+	ETags    map[string]string `json:"-"`
+	Checksum string            `json:"checksum,omitempty"`
+	Size     int64             `json:"size"`
+	Created  bool              `json:"stored"`
 }
 
 // Staged is a verified payload that has not yet been published into the local
